@@ -24,7 +24,8 @@ const (
 // done by guarding a pointer to the configuration and cloning the entire struct whenever it
 // changes.
 //
-// Adding a non-reference type to this struct means rewriting Clone as a deep copy.
+// Adding a reference type — a map, slice, or pointer — means updating Clone, whose shallow copy
+// would otherwise leave the clone aliasing the original's underlying data.
 type configuration struct {
 	// SyncIntervalMinutes determines how often (in minutes) the plugin syncs user attributes
 	// from the external source. Must be at least 1 minute.

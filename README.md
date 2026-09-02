@@ -247,7 +247,7 @@ Mattermost does not allow an attribute's type to change after it is created. To 
 
 ## Development
 
-```
+```text
 .
 ├── server/
 │   ├── sync/
