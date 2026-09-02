@@ -4,12 +4,13 @@ import (
 	"sync"
 
 	"github.com/gorilla/mux"
-	attrsync "github.com/mattermost/mattermost-plugin-user-attribute-sync-testing/server/sync"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 	"github.com/mattermost/mattermost/server/public/pluginapi"
 	"github.com/mattermost/mattermost/server/public/pluginapi/cluster"
 	"github.com/pkg/errors"
+
+	attrsync "github.com/mattermost/mattermost-plugin-user-attribute-sync-testing/server/sync"
 )
 
 // Plugin implements the interface expected by the Mattermost server to communicate between the server and plugin processes.
