@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mattermost/mattermost-plugin-user-attribute-sync-testing/server/sync"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
 	"github.com/mattermost/mattermost/server/public/pluginapi"
-	"github.com/mattermost/mattermost-plugin-user-attribute-sync-testing/server/sync"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )

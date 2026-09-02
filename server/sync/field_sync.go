@@ -62,9 +62,8 @@ type fieldDefinition struct {
 // attribute-based access control (ABAC) policy rules. This plugin ensures
 // these fields exist on startup and syncs external data into them.
 //
-// Access Control Examples:
-// The fields below demonstrate the three available access control modes. These are examples
-// showing what's possible - customize them based on your privacy and security requirements.
+// The four fields below cover the three access modes between them, so a test environment gets one
+// of each. Edit this array to create the attributes a particular test needs.
 //
 // All fields are marked as "protected" (see createField function), which means:
 //   - Only this plugin can modify the field structure (add/remove options, change types)
@@ -72,15 +71,15 @@ type fieldDefinition struct {
 //   - Access modes control read permissions (who can see the data)
 var fieldDefinitions = []fieldDefinition{
 	{
-		// Public Access Example: Job titles are visible to everyone in the organization
+		// Public: readable by everyone, while still being plugin-managed and not admin-editable.
 		Name:        "job_title",
 		DisplayName: "Job Title",
 		Type:        model.PropertyFieldTypeText,
 		AccessMode:  model.PropertyAccessModePublic,
 	},
 	{
-		// Shared-Only Access Example: Users can only see programs they have in common
-		// If viewing another user's profile, you'll only see programs you're both in
+		// Shared-only on a multiselect: viewing another user's profile shows only the programs
+		// both users are in.
 		Name:        "programs",
 		DisplayName: "Programs",
 		Type:        model.PropertyFieldTypeMultiselect,
@@ -93,9 +92,9 @@ var fieldDefinitions = []fieldDefinition{
 		AccessMode: model.PropertyAccessModeSharedOnly,
 	},
 	{
-		// Shared-Only Access Example using the Rank type (requires Mattermost server v11.9 or later - see release notes).
-		// Rank types are similar to Select, with the addition that each value includes a numerical representation that
-		// can support inequality comparisons (e.g. Clearance >= "Secret")
+		// Shared-only on a rank field (requires Mattermost server v11.9 or later). Rank is like
+		// Select, except each option carries a number, so policies can compare with inequalities
+		// (e.g. Clearance >= "Secret"). On a rank field, a user sees their own level and lower.
 		Name:        "clearance",
 		DisplayName: "Clearance",
 		Type:        model.PropertyFieldTypeRank,
@@ -108,8 +107,8 @@ var fieldDefinitions = []fieldDefinition{
 		AccessMode: model.PropertyAccessModeSharedOnly,
 	},
 	{
-		// Source-Only Access Example: Start dates are private - only this plugin can read them
-		// Useful for data that should be synchronized but not visible to users or other systems
+		// Source-only: only this plugin can read the values. Admins, integrations, and the user
+		// themselves see nothing.
 		Name:        "start_date",
 		DisplayName: "Start Date",
 		Type:        model.PropertyFieldTypeDate,

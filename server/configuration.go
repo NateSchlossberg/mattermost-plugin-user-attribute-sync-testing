@@ -20,29 +20,24 @@ const (
 // deserialized from the Mattermost server configuration in OnConfigurationChange.
 //
 // As plugins are inherently concurrent (hooks being called asynchronously), and the plugin
-// configuration can change at any time, access to the configuration must be synchronized. The
-// strategy used in this plugin is to guard a pointer to the configuration, and clone the entire
-// struct whenever it changes. You may replace this with whatever strategy you choose.
+// configuration can change at any time, access to the configuration must be synchronized. This is
+// done by guarding a pointer to the configuration and cloning the entire struct whenever it
+// changes.
 //
-// If you add non-reference types to your configuration struct, be sure to rewrite Clone as a deep
-// copy appropriate for your types.
+// Adding a non-reference type to this struct means rewriting Clone as a deep copy.
 type configuration struct {
 	// SyncIntervalMinutes determines how often (in minutes) the plugin syncs user attributes
 	// from the external source. Must be at least 1 minute.
 	SyncIntervalMinutes int
 
-	// AttributeProvider selects which example data source to sync from — one of the
+	// AttributeProvider selects which data source to sync from — one of the
 	// ConfigAttributeProvider* values above. It is rendered in the System Console by a custom
 	// webapp component rather than a built-in control, because the KVStore option needs upload
 	// and download buttons alongside the choice itself.
-	//
-	// A plugin built from this template would normally have a single data source and no such
-	// setting; it exists here to demonstrate both examples in one build.
 	AttributeProvider string
 }
 
-// Clone shallow copies the configuration. Your implementation may require a deep copy if
-// your configuration has reference types.
+// Clone shallow copies the configuration, which is sufficient while every field is a value type.
 func (c *configuration) Clone() *configuration {
 	var clone = *c
 	return &clone

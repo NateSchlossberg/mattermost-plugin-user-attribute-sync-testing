@@ -1,203 +1,178 @@
-# User Attribute Sync Starter Template
+# User Attribute Sync Test Tool
 
-**This is a starter template, not a production-ready plugin. It is meant to be forked and adapted to your own external data source and field definitions. Do not install it as-is expecting a working integration.**
+A Mattermost plugin that creates plugin-managed user attributes and fills them in from a JSON file. Use it to set up test environments that need attributes the System Console cannot create.
 
-A Mattermost plugin starter template that demonstrates how to synchronize user attributes from an external system into Mattermost. Synced attributes appear on user profiles in the UI and can also be referenced from attribute-based access control (ABAC) policy rules — this is why the plugin writes into the `access_control` property group rather than a plugin-private group. The template serves as both a working reference implementation and an educational resource for plugin developers.
+Attributes created by a plugin belong to that plugin. They are marked `protected`, which means only the plugin can change their definition or write their values — admins cannot edit them, through the System Console or the REST API. The `source_only` and `shared_only` access modes are available only on attributes like these.
 
-## What This Template Demonstrates
+The plugin creates four attributes in the `access_control` property group, so ABAC policies can reference them as `user.attributes.<name>`. Values come from a JSON file, either uploaded through the System Console or read from the server's filesystem.
 
-Mattermost's property system lets you store structured per-user metadata. A **field** defines the schema (name, type, options), while a **value** stores the actual data for a specific user. For select, multiselect, and rank fields, **options** define the allowed choices. Fields written into the `access_control` group also become available as `user.attributes.<field_name>` inside ABAC policy expressions.
+This repository is a fork of [mattermost-plugin-user-attribute-sync-starter-template](https://github.com/mattermost/mattermost-plugin-user-attribute-sync-starter-template). If you want a minimal starting point for your own plugin, use that one instead.
 
-This plugin shows how to create fields with hardcoded definitions and synchronize values from external data sources. Fields are defined explicitly in code with their types (text, date, multiselect, rank), and the plugin uses Mattermost's cluster job system to run periodic synchronization tasks. The implementation includes incremental synchronization that processes only changed data after the initial sync.
+## What it creates
 
-The template creates four example user attribute fields that demonstrate the different access control modes and value types: Job Title (text, public access), Programs (multiselect with options, shared-only access), Clearance (rank with ordered options, shared-only access), and Start Date (date, source-only access). All fields are marked as visible in the UI and protected (only this plugin can modify structure and write values).
+| Attribute | Type | Access mode | What it exercises |
+|---|---|---|---|
+| `job_title` | text | public | Plugin-managed but readable by everyone |
+| `programs` | multiselect | `shared_only` | Viewers see only the options they share with the target user |
+| `clearance` | rank | `shared_only` | Ordered levels, so policies can say `is at least` |
+| `start_date` | date | `source_only` | No one reads it through the API, not even the user themselves |
 
-It also contains  **two example, interchangeable data sources**, so you can see the same sync driven from more than one kind of input. One reads a JSON file from the server's filesystem; the other reads a JSON file an admin uploads through the System Console, which the plugin keeps in Mattermost's key-value store. The second also exists in case direct filesystem access is not an option for your Mattermost deployment. Which source is used is an ordinary plugin setting, so you can switch between them on a running server. See [Choosing a Data Source](#choosing-a-data-source).
+All four are `protected` and use `visibility: always`. `job_title` is public, so everyone can read it — it is still plugin-managed, and still not editable by an admin.
 
-## Architecture Overview
+The attributes appear in **System Console → User Attributes**, on user profiles, and in the ABAC policy editor.
 
-```text
-Plugin Activation (Once)
-  ├─> Register HTTP Routes
-  ├─> Create/Update User Attribute Fields
-  └─> Start Background Job
+## Requirements
 
-Background Job (On timed interval)
-  ├─> Build Or Replace The Data Source If The Setting Changed
-  ├─> Fetch Changed Values From The Configured Data Source
-  │     ├── File Provider     ──> reads <mattermost>/data/user_attributes.json
-  │     └── KV Store Provider ──> reads the plugin key-value store
-  └─> Bulk Upsert Values
+- Mattermost server 11.9.0 or later (the `rank` attribute type requires it)
+- An Enterprise Advanced license, for ABAC
+- Go 1.26.3 or later, to build the server binaries
+- Node v20.11, to build the webapp bundle and run the end-to-end tests
 
-System Console (Admin, whenever they choose)
-  └─> "User Attribute Source" Setting
-        ├─> Pick the data source
-        └─> For KV Store: upload / download / delete the stored file
-              └─> Plugin HTTP API ──> plugin key-value store
-```
+## Install
 
-The sync itself is unchanged by which source is selected: both sources satisfy the same interface and hand back the same shape of data.
+1. Build and deploy the plugin:
 
-### Key Components
-
-- **Field Definitions** (`server/sync/field_sync.go`) - Hardcoded schema with field types and options
-- **Value Sync** (`server/sync/value_sync.go`) - User attribute value synchronization
-- **Provider Interface** (`server/sync/provider.go`) - The contract every data source implements
-- **File Provider** (`server/sync/file_provider.go`) - Example JSON file-based data source
-- **KV Store Provider** (`server/sync/kv_store_provider.go`) - Example data source fed by admin upload
-- **Job Orchestrator** (`server/job.go`) - Cluster-aware periodic sync scheduler, and the selection of the configured source
-- **HTTP API** (`server/http_hooks.go`) - Sysadmin-only endpoints for managing the uploaded file
-- **Settings UI** (`webapp/src/components/`) - The custom System Console setting that drives both of the above
-
-## Building from Source
-
-### Prerequisites
-
-- Mattermost server 11.9.0 or later
-- Go 1.26.3 or later (matches the version Mattermost server pins)
-- Node v20.11 — needed for the webapp bundle and the end-to-end tests
-
-### Installation
-
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/mattermost/mattermost-plugin-user-attribute-sync-starter-template
-   cd mattermost-plugin-user-attribute-sync-starter-template
-   ```
-
-2. Build the plugin:
-   ```bash
-   make
-   ```
-
-3. Upload the plugin through System Console → Plugin Management, or use:
    ```bash
    make deploy
    ```
 
-4. **Important: Give the plugin some data.** Nothing syncs until you do, and how you do it depends on which source you use. The default is the file provider, so if you change nothing:
+   Or run `make` and upload `dist/*.tar.gz` through **System Console → Plugin Management**.
 
-   ```bash
-   cp data/user_attributes.json /path/to/mattermost/data/user_attributes.json
-   ```
+2. Go to **System Console → Plugins → User Attribute Sync Test Tool** and set:
 
-   The path is `data/user_attributes.json` relative to the **Mattermost server's** working directory, not the plugin directory, and `make deploy` does not put it there for you.
+   - **User Attribute Source** to *Direct Upload*
+   - **Sync Interval (Minutes)** to `1`, so uploads are picked up promptly
 
-   To use the upload source instead, go to **System Console → Plugins → User Attribute Sync Starter Template**, set **User Attribute Source** to *Direct Upload*, click **Save**, then use **Choose File** and **Upload** in the same section to send `data/user_attributes.json` to the server. Nothing needs to be on the server's filesystem when *Direct Upload* is selected.
+   Click **Save**.
 
-   Either way, update the JSON with your own users' email addresses and attributes — the file in this repository is a three-record example of the expected format.
+3. Edit `data/user_attributes.json` to use the email addresses of users on your server, then upload it with **Choose File** and **Upload** in the same section.
 
-## What to Expect
+The plugin creates the attributes as soon as it activates. Uploading a file does not trigger a sync, so the values appear on the next sync — within a minute at the interval above.
 
-When the plugin activates, it creates the four user attribute fields (Job Title, Programs, Clearance, and Start Date) in Mattermost. These fields appear in System Console → User Attributes. If the fields already exist from a previous activation, the plugin updates them to match the hardcoded definitions.
+To load data from the server's filesystem instead of uploading it, see [Where the values come from](#where-the-values-come-from).
 
-Immediately after activation, the plugin runs its first synchronization. It reads the attributes data from whichever source is configured, matches users by email address, and populates the user attribute values for each user found. The plugin logs its progress and any errors (such as users not found in Mattermost) during this process.
+## The data file
 
-After the initial sync, the plugin checks for changes every 60 minutes by default. Each source decides for itself which it is looking at: the file provider compares the modification time of `user_attributes.json`, and the KV store provider compares a timestamp the plugin records whenever an admin uploads. If a change is detected, the plugin syncs every user in the data again. You can adjust the sync interval in the plugin configuration settings.
+A JSON array of objects, one per user:
 
-The synced user attribute values can be viewed in System Console → User Attributes or through the Mattermost API, and they are also available to ABAC policy rules as `user.attributes.<field_name>`.
+```json
+[
+  {
+    "email": "john.doe@example.com",
+    "job_title": "Software Engineer",
+    "programs": ["Apples", "Oranges"],
+    "clearance": "Top Secret",
+    "start_date": "2023-01-15"
+  }
+]
+```
 
-## Choosing a Data Source
+`data/user_attributes.json` in this repository is an example of the format. Replace the email addresses with your own test users before uploading it.
 
-The **User Attribute Source** setting in System Console → Plugins → User Attribute Sync Starter Template selects which of the two example sources the plugin reads from. Changing it needs no plugin restart: the setting is saved immediately, and the job picks up the new source on its next run.
+- `email` matches the record to a Mattermost user. It is never written as an attribute.
+- Every other key is an attribute name from the definitions in `server/sync/field_sync.go`. Keys that do not match a known attribute are skipped with a warning in the logs.
+- Text and date values are strings; dates use `YYYY-MM-DD`.
+- Multiselect values are an array of option names. Rank and select values are a single option name. Option names are translated to the option IDs Mattermost generated when it created the attribute, so they have to match the definitions exactly.
+- Records whose email matches no user are skipped, as are individual values that fail to convert. The rest of the file still syncs.
+
+## Where the values come from
+
+The **User Attribute Source** setting selects where the plugin reads the file from. Changing it does not need a restart; the next sync picks up the new source.
 
 | | Local Filesystem | Direct Upload |
 |---|---|---|
-| Reads from | `<mattermost>/data/user_attributes.json` | Mattermost's key-value store |
-| Data is placed by | You, on the server's filesystem | An admin, through the System Console |
-| Survives redeploying the container | Only if `<mattermost>/data` is a persistent volume | Yes — the KV store is in the database |
-| Works on Mattermost Cloud | No — no filesystem access | Yes |
+| Reads from | `<mattermost>/data/user_attributes.json` | The plugin's key-value store |
+| You supply the file by | Copying it onto the server | Uploading it in the System Console |
+| Survives a container redeploy | Only if `<mattermost>/data` is a persistent volume | Yes, the key-value store is in the database |
+| Works on Mattermost Cloud | No | Yes |
 | Detects changes by | File modification time | A timestamp written on upload |
-| Good for | Local development; servers you have shell access to | Cloud and containerized deployments; letting an admin manage the data without server access |
 
-Neither is meant to be the source you ship with. They are two worked examples of the same interface, chosen to be different enough to be instructive.
+For *Local Filesystem*, copy the file into the server's data directory:
 
-### Managing the Uploaded File
+```bash
+cp data/user_attributes.json /path/to/mattermost/data/user_attributes.json
+```
 
-With *Direct Upload* selected, the settings section grows a small panel for the stored file. It tells you whether one is already present, and lets you replace it, download it back, or delete it. Files are validated before being sent — they must be a JSON array of objects and no larger than 10 MB — and rejected files never reach the server.
+The path is relative to the Mattermost server's working directory, not the plugin's. `make deploy` does not put the file there.
 
-Downloading returns the exact file that was uploaded, which is the quickest way to confirm what the plugin is actually working from. Deleting asks for confirmation first, because there is no server-side copy to restore from.
+### Managing the uploaded file
 
-These actions are immediate and do not go through the console's Save button, because they act on stored data rather than on a setting.
+With *Direct Upload* selected, the settings section shows a panel for the stored file. It reports whether a file is present and when it was uploaded, and lets you replace, download, or delete it. Downloading returns the exact bytes that were uploaded, which is the quickest way to confirm what the plugin is working from. Deleting asks for confirmation.
 
-### The HTTP API Behind It
+These buttons act immediately and do not go through the console's **Save** button.
 
-The upload panel is a client for four endpoints the plugin registers itself, in `server/http_hooks.go`. They are worth knowing about if you want to script data loading, and they are the part of the template to copy if your own plugin needs an authenticated API.
+Files are checked before upload: they must be a JSON array of objects and no larger than 10 MB. Individual records are not validated, because one bad record should not stop the rest of the file from syncing.
+
+### Loading data over HTTP
+
+The upload panel is a client for four endpoints, which are useful for seeding a test server from a script. All of them require a system admin.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `POST` | `/user_attributes` | Store an attributes file. Body is the raw JSON. |
+| `POST` | `/user_attributes` | Store a file. The body is the raw JSON. |
 | `GET` | `/user_attributes` | Download the stored file. |
-| `GET` | `/user_attributes/status` | `{"exists": bool, "lastUpdated": time\|null}` — check what is stored, and when it was uploaded, without downloading. |
+| `GET` | `/user_attributes/status` | `{"exists": bool, "lastUpdated": time\|null}` |
 | `DELETE` | `/user_attributes` | Remove the stored file. |
 
-All four are prefixed with `/plugins/com.mattermost.user-attribute-sync-starter-template`, and all four require a **system admin** — these endpoints overwrite the data behind every user's attributes, and those attributes can gate channel access through ABAC policies. Authentication uses the `Mattermost-User-Id` header, which the Mattermost server sets on the way in and which is the only header a plugin can trust.
-
-Uploads are validated for shape only: the payload has to be a JSON array of objects. Individual records are deliberately not checked, because rejecting an entire file over one bad record would be the wrong trade-off — external data routinely contains a few unusable records, and refusing all of it means syncing nothing. Bad records are handled one at a time during sync, where each one logs a warning and the rest continue.
+Full paths are prefixed with `/plugins/com.mattermost.user-attribute-sync-test-tool`.
 
 ```bash
-# Upload with curl, as a system admin
 curl -X POST \
   -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
   --data-binary @data/user_attributes.json \
-  http://localhost:8065/plugins/com.mattermost.user-attribute-sync-starter-template/user_attributes
+  http://localhost:8065/plugins/com.mattermost.user-attribute-sync-test-tool/user_attributes
 ```
 
-## Access Control
+## How syncing works
 
-This template demonstrates Mattermost's field-level access control system through its example fields, covering each of the three access modes.
+The plugin creates or updates the attribute definitions when it activates. Value sync runs on a background job: immediately on the very first run, then every **Sync Interval (Minutes)** after the previous run finished. The default is 60 minutes and the minimum is 1.
 
-### Access Modes
+Each source decides for itself whether anything changed — the filesystem source compares the file's modification time, the upload source compares the timestamp written when you uploaded. When nothing has changed, the sync does no work.
 
-**Public Access** (Job Title example): Everyone can read all field values via API and UI. Best for non-sensitive organizational data like job titles, departments, or office locations.
+Uploading a file, or copying one onto the server, does not itself trigger a sync. The next scheduled run picks it up.
 
-**Source-Only Access** (Start Date example): Only this plugin can read field values via API. Other users, admins, and integrations see empty options and no values. Useful for data that must be synchronized but should remain private, like employee start dates or internal identifiers. Even users cannot see their own values through the API.
+To sync without waiting, disable and re-enable the plugin. That rebuilds the job, which evaluates the schedule as soon as it starts and runs the sync if the interval has already elapsed since the last run. Note that the last-run time is stored in the plugin's key-value store and survives a restart, so re-enabling part-way through a long interval waits out the remainder — lower the interval first if you are in that position.
 
-**Shared-Only Access** (Programs and Clearance examples): Users can only see field options and values they share with the target user. Only works with select, multiselect, and rank field types. Example: If Alice is in [Apples, Bananas] and Bob is in [Bananas, Oranges], Alice viewing Bob's profile only sees [Bananas] as their common program. On a rank field, a user sees their own rank and lower. Best for private categorical data where users should only discover shared attributes.
+Keeping the interval at 1 while you load data avoids the question entirely.
 
-### Protected Fields
+Progress and per-user problems go to the server log:
 
-All of the example fields are marked as "protected", which means only this plugin can modify field structure (add/remove options, change types) and write values. Users and admins cannot manually edit protected fields. Read access is controlled separately by the access mode.
+```bash
+make logs-watch
+```
 
-### UI Visibility vs Data Access
+## Access modes
 
-The `visibility` attribute controls whether values appear in the Mattermost UI (user profiles, user cards), but does NOT affect data access via the API. Even if visibility is set to `hidden`, data can still be retrieved via API subject to access mode permissions. To control actual data access, use the `access_mode` attribute.
+The access mode controls who can read an attribute's values through the API and the UI.
 
-### Choosing an Access Mode
+**Public** (`job_title`) — everyone can read every value. This is the default when no access mode is set.
 
-Consider your data sensitivity and use case:
+**Shared only** (`programs`, `clearance`) — a user sees only the options and values they have in common with the user they are looking at. If Alice is in [Apples, Oranges] and Bob is in [Oranges, Lemons], Alice sees only Oranges on Bob's profile. On a rank attribute, a user sees their own level and lower. Works with select, multiselect, and rank only.
 
-| Data Type | Recommended Mode | Example Fields |
-|-----------|------------------|----------------|
-| Public organizational info | Public | Job Title, Department, Office Location, Phone Extension |
-| Sensitive internal data | Source-Only | Start Date, Salary Band, Performance Rating, Employee ID |
-| Private categorical membership | Shared-Only | Programs, Projects, Teams, Certifications, Skills |
-| Private ordered levels | Shared-Only | Clearance, Seniority Tier, Support Plan |
+**Source only** (`start_date`) — only this plugin can read the values. Everyone else, including admins, integrations, and the user themselves, sees no value and no options.
 
-**Note**: Source-only and shared-only modes require the field to be marked as protected. Shared-only mode can only be used with select, multiselect, or rank field types.
+`source_only` and `shared_only` require the attribute to be `protected`, which is why they are only available on plugin-managed attributes. These are not LDAP or SAML synced attributes, which are locked to those sync jobs instead.
 
-## Customization Guide
+Access mode is separate from `visibility`, which only controls whether values are shown in the Mattermost UI. Hiding an attribute in the UI does not restrict API access to it.
 
-### Adding New Fields
+## Changing which attributes it creates
 
-Edit `server/sync/field_sync.go` and add entries to the `fieldDefinitions` array:
+Attribute definitions live in the `fieldDefinitions` array in `server/sync/field_sync.go`. After editing them, run `make deploy` — the plugin reconciles the definitions on activation.
+
+### Add an attribute
 
 ```go
 {
     Name:        "department",
     DisplayName: "Department",
     Type:        model.PropertyFieldTypeText,
-    AccessMode:  model.PropertyAccessModePublic, // Choose: Public, SourceOnly, or SharedOnly
+    AccessMode:  model.PropertyAccessModePublic,
 },
 ```
 
-`Name` is the canonical identifier: it is the key looked up in the external data, and it is what ABAC policies reference as `user.attributes.<name>`, so it must be a valid CEL identifier (no spaces or punctuation). `DisplayName` is the free-form label shown in the UI.
+`Name` is the identifier used as the key in the data file and as `user.attributes.<name>` in ABAC policies, so it must be a valid CEL identifier — no spaces or punctuation. `DisplayName` is the label shown in the UI.
 
-Restart the plugin to create the new field. See the Access Control section above for details on access modes.
-
-### Changing Select or Multiselect Options
-
-Update the `Options` array in `fieldDefinitions`:
+### Change select or multiselect options
 
 ```go
 {
@@ -213,13 +188,11 @@ Update the `Options` array in `fieldDefinitions`:
 },
 ```
 
-Mattermost generates an ID for each option, and values are stored as those IDs rather than names — the plugin reads the generated IDs back into its `FieldIDCache` and translates names to IDs when writing values.
+Mattermost generates an ID for each option and stores values as those IDs. The plugin reads the IDs back and translates names from the data file when it writes values. Existing options are never removed, because users may already hold those values.
 
-Restart the plugin to add new options. This template plugin never removes existing options from Mattermost because users may have already selected those values.
+### Add a rank attribute
 
-### Adding a Rank Field
-
-A rank field works like a select field — a user holds exactly one option — except each option also carries an integer `Rank` that defines the ordering:
+A rank attribute works like a select — a user holds one option — except each option carries an integer that defines the ordering:
 
 ```go
 {
@@ -235,73 +208,58 @@ A rank field works like a select field — a user holds exactly one option — e
 },
 ```
 
-That ordering is what lets an ABAC policy express a threshold with `is at least` instead of enumerating every qualifying option — for example `user.attributes.clearance >= "Secret"` matches both Secret and Top Secret.
+The ordering is what lets a policy express a threshold with `is at least` instead of listing every qualifying option, so `user.attributes.clearance >= "Secret"` matches both Secret and Top Secret. Every option on a rank attribute needs a `Rank`, and the plugin refuses to create or update the attribute otherwise.
 
-Every option on a rank field must have a `Rank`, since the ranks are what establish the ordering; the plugin refuses to create or update the field otherwise.
+### Change the filesystem path
 
-### Changing Sync Interval
-
-The sync interval can be configured in the plugin settings. Navigate to System Console → Plugins → User Attribute Sync Starter Template and adjust the "Sync Interval (Minutes)" setting. The default is 60 minutes.
-
-### Changing Data File Path
-
-This applies to the *Local Filesystem* source only. Edit `server/sync/file_provider.go` and modify the constant:
+Edit the constant in `server/sync/file_provider.go`:
 
 ```go
 const defaultDataFilePath = "data/my_custom_file.json"
 ```
 
-The path is resolved against the Mattermost server process's working directory. The *Direct Upload* source has no path to change — its data lives in the key-value store under single fixed key.
+The path resolves against the Mattermost server's working directory. The upload source has no path — its data lives in the key-value store under a single key.
 
-### Implementing Custom Data Sources
+### Attribute types cannot change
 
-The template ships two example providers, but the point of the interface is that you replace them with one of your own:
+Mattermost does not allow an attribute's type to change after it is created. To change one, delete the attribute — which deletes its values — then update the definition and redeploy.
 
-1. **Implement the `AttributeProvider` interface** in a new file (e.g., `server/sync/api_provider.go`):
-   - `GetUserAttributes()` - Fetch user data from your external system
-   - `Close()` - Clean up resources
+## Troubleshooting
 
-2. **Construct it in `OnActivate`** in `server/plugin.go`:
-   ```go
-   p.attributeProvider = sync.NewAPIProvider(apiURL, apiKey)
-   ```
+**Nothing synced.** Check the log with `make logs-watch`. The usual causes are no file uploaded, the file not being where the filesystem source looks, or emails in the file matching no user on the server. A sync that matches no users logs warnings and still finishes successfully.
 
-3. **Handle incremental sync** by tracking state internally (e.g., last sync timestamp)
+**The attributes are read-only in the System Console.** Expected. Every attribute this plugin creates is `protected`, so only the plugin can change its definition or values.
 
-**Expect to delete the source selector.** The `AttributeProvider` setting, the provider switch in `server/job.go`, and the radios in `webapp/src/components/attribute_provider.tsx` exist so this template can demonstrate two sources in one build. A real plugin usually has exactly one, and is simpler for saying so: construct it directly in `OnActivate` and remove the setting.
+**The plugin fails to activate.** Attribute operations on the `access_control` group need a license. Check that the server has one.
 
-If you do want a runtime choice — different sources per environment, or a migration from one to another — keep the switch, and note that the source name is spelled in five places that have to agree: the `ConfigAttributeProvider*` constants in `server/configuration.go`, the switch in `server/job.go`, the `Provider` type and radios in `attribute_provider.tsx`, the `default` in `plugin.json`, and the values in `e2e/constants.ts`. An unrecognized name panics on purpose, rather than quietly syncing nothing.
+## Limitations
 
-Common provider implementations:
-- **REST API**: Poll external API for changed users since last sync
-- **LDAP**: Query directory for users modified after last sync time
-- **Database**: Query users table with `updated_at > last_sync`
-- **Webhook**: Accept push notifications of changed users (requires API endpoint)
+- Attribute definitions are hardcoded in `server/sync/field_sync.go`. The data file supplies values only, so adding or changing an attribute means editing Go and redeploying.
+- Uploading a file does not trigger a sync; it happens on the next scheduled run.
+- Users are matched by email address only.
+- When a file changes, every record in it is synced again. There is no per-record diffing.
 
-### Field Type Constraints
+## Planned improvements
 
-**Important**: Field types cannot be changed after creation (Mattermost platform limitation). To change a field type:
-1. Delete the field (all user values will be lost). You can do this via the Mattermost API or by adding code to delete the field during plugin activation.
-2. Update the field definition in code
-3. Restart the plugin to recreate with new type
+- Trigger a sync when a file is uploaded, instead of waiting for the next scheduled run.
+- Drop the scheduled job entirely in *Direct Upload* mode, where an upload is the only thing that can change the data.
+- Take attribute definitions from the uploaded file, so new attributes can be created without editing Go.
 
 ## Development
-
-### Project Structure
 
 ```
 .
 ├── server/
 │   ├── sync/
-│   │   ├── field_sync.go         # Field creation and schema management
-│   │   ├── value_sync.go         # User attribute value synchronization
+│   │   ├── field_sync.go         # Attribute definitions and schema reconciliation
+│   │   ├── value_sync.go         # Writing per-user values
 │   │   ├── provider.go           # AttributeProvider interface
-│   │   ├── file_provider.go      # File-based provider implementation
-│   │   └── kv_store_provider.go  # Upload-based provider implementation
-│   ├── plugin.go                 # Plugin lifecycle (OnActivate/OnDeactivate)
+│   │   ├── file_provider.go      # Reads the file from the server's filesystem
+│   │   └── kv_store_provider.go  # Reads the uploaded file from the key-value store
+│   ├── plugin.go                 # OnActivate / OnDeactivate
 │   ├── configuration.go          # Settings
-│   ├── http_hooks.go             # Sysadmin-only API for the uploaded file
-│   └── job.go                    # Background job orchestration
+│   ├── http_hooks.go             # The /user_attributes endpoints
+│   └── job.go                    # Background sync job
 ├── webapp/src/
 │   ├── index.tsx                 # Registers the custom admin console setting
 │   └── components/
@@ -309,30 +267,29 @@ Common provider implementations:
 │       ├── upload_user_attributes.tsx  # Upload / download / delete panel
 │       └── confirm_modal.tsx           # Confirmation dialog for deletion
 ├── e2e/                          # Playwright tests — see e2e/README.md
-├── data/
-│   └── user_attributes.json      # Example data file
-└── README.md
+└── data/
+    └── user_attributes.json      # Example data file
 ```
-
-### Running Tests
 
 ```bash
-make test           # Run all unit tests (Go and webapp)
-make check-style    # Run linting and type checking
-make all            # Run check-style, test, and build
+make                  # check-style, test, and build
+make test             # Go and webapp unit tests
+make check-style      # Linting and type checking
+make deploy           # Build and deploy to a running server
+make watch            # Rebuild the webapp bundle when its sources change
+make deploy-from-watch  # Install the bundle that `make watch` rebuilt
+make logs-watch       # Tail the plugin's log on the running server
 ```
 
-The end-to-end tests are separate, because they need a running Mattermost server with the plugin deployed:
+The end-to-end tests need a running server with the plugin deployed, so they are separate from `make test`:
 
 ```bash
-make test-e2e       # Playwright, against http://localhost:8065 by default
+make test-e2e      # Playwright, against http://localhost:8065 by default
 ```
 
-See [`e2e/README.md`](e2e/README.md) for the prerequisites, how to run individual specs, and the conventions those tests follow. They are not wired into CI in this template — the right way to stand up a server for them depends on your infrastructure.
+See [`e2e/README.md`](e2e/README.md) for prerequisites, how to run a single spec, and the conventions those tests follow.
 
-### Local Development
-
-Enable local mode in your Mattermost server configuration:
+`make deploy` connects over the server's local mode socket when one is available, which needs local mode enabled in the server's configuration:
 
 ```json
 {
@@ -343,26 +300,8 @@ Enable local mode in your Mattermost server configuration:
 }
 ```
 
-Then deploy automatically on changes:
-
-```bash
-make deploy
-```
-
-For continuous deployment during development:
-
-```bash
-export MM_SERVICESETTINGS_SITEURL=http://localhost:8065
-export MM_ADMIN_TOKEN=your_token_here
-make watch
-```
+Without a socket it falls back to the REST API, using `MM_SERVICESETTINGS_SITEURL` with either `MM_ADMIN_TOKEN` or `MM_ADMIN_USERNAME` and `MM_ADMIN_PASSWORD`.
 
 ## License
 
-See LICENSE file for details.
-
-## Questions or Issues?
-
-This is a starter template meant to be customized for your specific use case. The code is designed to be read, understood, and modified. Start by exploring the `server/sync/` directory to understand how each component works, then adapt it to your external system. If your plugin needs its own admin console setting or HTTP endpoints, `server/http_hooks.go` and `webapp/src/components/` are the parts to read next; if it does not, they are safe to delete along with the source selector.
-
-For Mattermost plugin development questions, see the [plugin documentation](https://developers.mattermost.com/extend/plugins/).
+See [LICENSE](LICENSE).

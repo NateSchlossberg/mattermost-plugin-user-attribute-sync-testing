@@ -4,11 +4,11 @@ import (
 	"sync"
 
 	"github.com/gorilla/mux"
+	attrsync "github.com/mattermost/mattermost-plugin-user-attribute-sync-testing/server/sync"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 	"github.com/mattermost/mattermost/server/public/pluginapi"
 	"github.com/mattermost/mattermost/server/public/pluginapi/cluster"
-	attrsync "github.com/mattermost/mattermost-plugin-user-attribute-sync-testing/server/sync"
 	"github.com/pkg/errors"
 )
 
@@ -25,9 +25,8 @@ type Plugin struct {
 	// backgroundJob runs attribute sync on the configured time interval.
 	backgroundJob *cluster.Job
 
-	// attributeProvider provides an example of syncing user attribute data from external source.
-	// there are two examples provided in this repo: FileProvider and KVStoreProvider.
-	// Which one is in use is decided by the AttributeProvider configuration.
+	// attributeProvider reads user attribute data from a source outside Mattermost. Either
+	// FileProvider or KVStoreProvider, decided by the AttributeProvider configuration.
 	//
 	// The sync job owns these two fields while it is scheduled, which is why neither is locked.
 	attributeProvider attrsync.AttributeProvider
@@ -108,9 +107,8 @@ func (p *Plugin) OnActivate() error {
 // resources. The HTTP router needs no cleanup; the server stops routing to a deactivated plugin.
 //
 // The order is important: cluster.Job.Close blocks until a running sync returns, which is what
-// makes it safe to close the provider here.
-// The example Attribute Providers in this repo have no-ops for Close() but this pattern will
-// be safe for other providers that require it.
+// makes it safe to close the provider here. Both providers' Close() are currently no-ops, but the
+// ordering holds for a provider that needs to release something.
 func (p *Plugin) OnDeactivate() error {
 	if p.backgroundJob != nil {
 		if err := p.backgroundJob.Close(); err != nil {

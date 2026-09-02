@@ -84,7 +84,6 @@ parallelism take a filesystem lock around config-mutating tests instead;
 
 ## Continuous integration
 
-These tests are not wired into CI in this template. They need a running server
-with the plugin deployed, and the right way to provide that depends on your
-infrastructure. Add a job that stands up a server, runs `make deploy`, then runs
-`make test-e2e`.
+These tests are not wired into CI. They need a running server with the plugin
+deployed, which no existing workflow provides. Wiring them up means adding a job
+that stands up a server, runs `make deploy`, then runs `make test-e2e`.

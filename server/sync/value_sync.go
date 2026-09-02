@@ -61,8 +61,8 @@ func buildPropertyValue(
 	fieldValue interface{},
 	cache *FieldIDCache,
 ) (*model.PropertyValue, error) {
-	// Use Email to map external attributes to users, not synced as an attribute.
-	// An extender of this plugin template could choose some other way to identify users.
+	// email maps a record to a Mattermost user; it is never written as an attribute. Changing the
+	// identity strategy means changing SyncUsers, which consumes it, along with this skip.
 	if fieldName == "email" {
 		return nil, nil
 	}

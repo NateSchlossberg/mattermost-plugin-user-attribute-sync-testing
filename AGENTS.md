@@ -1,15 +1,18 @@
 # AGENTS.md
 
-Detailed context for AI agents working on this codebase.
+Detailed context for AI agents working on this codebase. [README.md](README.md) is the source of truth for what the plugin does and how it is used.
 
 ## What This Project Is
 
-A **Mattermost plugin starter template** that synchronizes user attributes from an external system into Mattermost. The synced attributes appear on user profiles in the UI and are also addressable as `user.attributes.<field_name>` from attribute-based access control (ABAC) policy rules — which is why the plugin writes into the `access_control` property group. It's a reference implementation and educational resource — designed to be read, understood, and adapted. This is not a plugin that can be used as-is as a plug-and-play solution. It is expected that a developer takes this and uses it as the foundation of their own custom plugin.
+A **Mattermost plugin that creates plugin-managed user attributes and fills them in from a JSON file.** It exists to set up test environments that need attributes the System Console cannot create: `protected` attributes, and the `source_only` and `shared_only` access modes that are only available on them. The attributes appear on user profiles in the UI and are addressable as `user.attributes.<field_name>` from attribute-based access control (ABAC) policy rules — which is why the plugin writes into the `access_control` property group.
 
-It ships **two example data sources**, selected by an admin at runtime: `FileProvider` (a JSON file on the server's filesystem) and `KVStoreProvider` (a JSON file uploaded through the System Console into the plugin KV store). `KVStoreProvider` exists mainly because the filesystem source is awkward or impossible to deploy in some environments — Cloud installations give no direct filesystem access, and container filesystems are ephemeral, so a file placed next to the server does not survive a restart. It also happens to demonstrate the pieces a provider needs if it wants them: a custom admin console setting, a plugin HTTP API, and server-side storage.
+It is a fork of `mattermost-plugin-user-attribute-sync-starter-template` and is no longer a template. Guidance written for someone building their own plugin does not belong here; guidance for someone loading attributes into a test server does.
 
-**Plugin ID:** `com.mattermost.user-attribute-sync-starter-template`
+It ships **two data sources**, selected by an admin at runtime: `FileProvider` (a JSON file on the server's filesystem) and `KVStoreProvider` (a JSON file uploaded through the System Console into the plugin KV store). `KVStoreProvider` exists because the filesystem source is awkward or impossible to deploy in some environments — Cloud installations give no direct filesystem access, and container filesystems are ephemeral, so a file placed next to the server does not survive a restart. Supporting it is also what pulls in the rest of the machinery: a custom admin console setting, a plugin HTTP API, and server-side storage.
+
+**Plugin ID:** `com.mattermost.user-attribute-sync-test-tool`
 **Min Mattermost version:** 11.9.0 (the `rank` field type requires it)
+**License:** Enterprise Advanced, for ABAC. Every field and value operation on the `access_control` group requires a license, so the plugin fails at activation without one.
 **Languages:** Go 1.26.3+ (server), TypeScript/React (webapp)
 
 ## Architecture
@@ -55,8 +58,8 @@ All fields and values are stored in the `access_control` property group (`model.
 | `server/sync/provider.go` | `AttributeProvider` interface: `GetUserAttributes() ([]map[string]interface{}, error)` and `Close() error`. |
 | `server/sync/field_sync.go` | Field definitions array and schema management. Creates/updates user attribute fields. Maintains `FieldIDCache` mapping external names to Mattermost-generated IDs. |
 | `server/sync/value_sync.go` | `SyncUsers()` — matches users by email, builds PropertyValue objects, bulk upserts. Handles text, date, multiselect, and rank value types. |
-| `server/sync/file_provider.go` | Example `AttributeProvider`. Reads JSON from the Mattermost data directory. Tracks file modification time for incremental sync. |
-| `server/sync/kv_store_provider.go` | Example `AttributeProvider`. Reads the JSON uploaded via the HTTP API out of the plugin KV store. Owns the KV key (`UserAttrsStoreKey`), the `StoredUserAttrs` value stored under it, and `ReadStoredUserAttrs`; gates work on the stored timestamp. |
+| `server/sync/file_provider.go` | `AttributeProvider` reading JSON from the Mattermost data directory. Tracks file modification time for incremental sync. |
+| `server/sync/kv_store_provider.go` | `AttributeProvider` reading the JSON uploaded via the HTTP API out of the plugin KV store. Owns the KV key (`UserAttrsStoreKey`), the `StoredUserAttrs` value stored under it, and `ReadStoredUserAttrs`; gates work on the stored timestamp. |
 | `server/main.go` | Plugin entry point (minimal). |
 | `server/manifest.go` | Auto-generated from plugin.json — do not edit manually. |
 
@@ -99,16 +102,16 @@ The webapp exists only to render the custom `AttributeProvider` setting in the S
 
 ## Field Definitions
 
-Defined in `server/sync/field_sync.go` we have a few example user attribute field definitions in the `fieldDefinitions` array:
+Defined in the `fieldDefinitions` array in `server/sync/field_sync.go`:
 
 1. **Job Title** — `job_title`, Text type, Public access
 2. **Programs** — `programs`, Multiselect type, SharedOnly access, options: Apples/Oranges/Lemons/Grapes
 3. **Clearance** — `clearance`, Rank type, SharedOnly access, options: CUI(1)/Confidential(2)/Secret(3)/Top Secret(4)
 4. **Start Date** — `start_date`, Date type, SourceOnly access
 
-All fields are `protected: true` (only this plugin can modify structure and write values) and `visibility: always` (shown in UI).
+All fields are `protected: true` (only this plugin can modify structure and write values) and `visibility: always` (shown in UI). Between them the four cover all three access modes, so a test environment gets one of each. Editing the array to suit a particular test is expected — README documents how.
 
-These fields are examples, and should be adapted to the developer's use case.
+Field types cannot be changed after creation (a Mattermost limitation), so changing one means deleting the field, which deletes its values, and recreating it.
 
 ### Access Modes
 
@@ -132,6 +135,8 @@ These fields are examples, and should be adapted to the developer's use case.
 - `fieldDefinition.hasOptions()` is the single place that decides which field types carry options, and `fieldDefinitionsByName` (a package-level index of `fieldDefinitions`) is how value sync recovers a field's declared type from the external data's key. Adding an option-bearing field type means updating `hasOptions()` and the value-formatting switch in `buildPropertyValue()` together, or values will be written as raw names instead of option IDs.
 - Failure handling is per-user and per-field: unknown fields, unsupported value types, format errors, missing users, and upsert failures all log and continue. `SyncUsers()` returns `nil` unless something structural goes wrong — a "successful" sync can have written nothing.
 - Timing comes from `nextWaitInterval()`, which schedules relative to `metadata.LastFinished` (0 on first run, so activation syncs immediately) and falls back to 60 minutes if the configured interval is < 1.
+- `cluster.Job` persists `LastFinished` in the plugin KV store under `cron_AttributeSync`, so it survives deactivation and redeployment. Two consequences: re-enabling the plugin syncs immediately only if the interval has already elapsed since the last run, and a sleeping job does not observe an interval change until it next wakes (`OnConfigurationChange` stores the config and nothing more). Nothing deletes that key on disable or on a forced upload — `DeleteAllKeysForPlugin` is only reachable from the plugin API itself.
+- **Uploading a file does not trigger a sync.** `handleUploadUserAttributes` only writes to the KV store; the next scheduled run picks it up. Doing better is a planned improvement (see README).
 - `FileProvider` uses the *relative* path `data/user_attributes.json`, resolved against the Mattermost server process's working directory (i.e. `<mattermost>/data/user_attributes.json`) — not the plugin bundle. `make deploy` does not ship the file; it must be copied there separately. Its incremental behavior is mtime-based: unchanged file → empty slice → `runSync()` returns early.
 - `KVStoreProvider` is the same contract with a different "unchanged" test: it compares the stored `lastUpdated` timestamp (written by the upload handler) against its own in-memory `lastSynced`, and returns an empty slice when the stored timestamp is older. `lastSynced` is per-process and not persisted, so a plugin restart re-syncs the stored file once. It is set immediately after the read and *before* JSON parsing — deliberately, so a stored file that fails to parse is not retried on every tick.
 - **Both providers distinguish "no data" from "no change", and only the second is an empty slice.** No data is an error, so it lands in the log via `runSync`'s `Failed to fetch changed users`: `FileProvider` gets there through `os.Stat` failing, `KVStoreProvider` through an explicit `len()` check on the stored data. The reasoning is that sync has been pointed at a specific place, so finding nothing there is a misconfiguration rather than a steady state — a fresh install therefore logs an error every tick until it is given data. If you add a provider, match this: return an empty slice only for "nothing changed".
@@ -148,7 +153,7 @@ These fields are examples, and should be adapted to the developer's use case.
 
 ## HTTP API
 
-Registered in `server/http_hooks.go` on a `gorilla/mux` router, served through the `ServeHTTP` plugin hook. Full paths are prefixed `/plugins/com.mattermost.user-attribute-sync-starter-template`.
+Registered in `server/http_hooks.go` on a `gorilla/mux` router, served through the `ServeHTTP` plugin hook. Full paths are prefixed `/plugins/com.mattermost.user-attribute-sync-test-tool`.
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -174,20 +179,25 @@ Things to preserve when changing these:
 - Because `showTitle: true` is passed at registration, the console wraps the component in its own `Setting` (rendering `display_name` as the label and `help_text` beneath it). The `help_text` was dropped from `plugin.json` because the component's "Source Details" panel already explains each option; add it back rather than duplicating text if that changes.
 - If the plugin is disabled, the webapp component is not registered, and the console renders a warning banner ("In order to view this setting, enable the plugin and click Save") in place of the setting. A blank-looking setting usually means the bundle failed to load, not that the component is broken.
 
-## Extending the Plugin
+## Adding to the Plugin
 
-### Adding a new field
-Add an entry to `fieldDefinitions` in `server/sync/field_sync.go`. Restart plugin. Select, multiselect, and rank types also need `Options` populated; on a rank field every option needs a `Rank`, which `buildOptionsArr()` enforces.
+### A new attribute
+Add an entry to `fieldDefinitions` in `server/sync/field_sync.go` and restart the plugin. Select, multiselect, and rank types also need `Options` populated; on a rank field every option needs a `Rank`, which `buildOptionsArr()` enforces.
 
-### Custom data source
-Write code to implement the `AttributeProvider` interface (two methods: `GetUserAttributes`, `Close`). `FileProvider` and `KVStoreProvider` are the two worked examples — copy whichever is closer.
+### A new data source
+Implement the `AttributeProvider` interface (two methods: `GetUserAttributes`, `Close`). `FileProvider` and `KVStoreProvider` are the two existing implementations — copy whichever is closer.
 
-**The expected path for a developer adapting this template is to delete both example providers and the selection machinery, and construct their single real provider directly in `OnActivate()`.** The `AttributeProvider` setting exists so the template can demonstrate two sources side by side, not because the interface requires a choice. Runtime selection remains available if a real deployment genuinely needs it — e.g. differing sources per environment, or a migration between sources — and in that case four places have to agree on the same literal string: a `ConfigAttributeProvider*` constant (`server/configuration.go`) and a `case` in `newAttributeProvider()` (`server/job.go`), the `Provider` union and a radio in `attribute_provider.tsx`, and the values in `e2e/constants.ts`. Miss the `case` and `newAttributeProvider()` panics; miss the radio and the value is unreachable from the console.
+Adding one means four places agreeing on the same literal string: a `ConfigAttributeProvider*` constant (`server/configuration.go`) and a `case` in `newAttributeProvider()` (`server/job.go`), the `Provider` union and a radio in `attribute_provider.tsx`, and the values in `e2e/constants.ts`. Miss the `case` and `newAttributeProvider()` panics; miss the radio and the value is unreachable from the console.
 
 Whatever the source, `GetUserAttributes()` is expected to return an **empty slice when nothing has changed** — the job runs on a timer and `runSync()` returns early on an empty result. `FileProvider` decides this from file mtime, `KVStoreProvider` from a stored timestamp.
 
-### Field type constraint
-Field types cannot be changed after creation (Mattermost limitation). Must delete and recreate.
+### Server-side rules to work within
+Enforced by the property service, not by this plugin, so they cannot be worked around from here:
+
+- Every field and value operation on the `access_control` group requires an Enterprise license.
+- `protected` and `source_plugin_id` can only be set by a plugin; `source_only` and `shared_only` require `protected`.
+- `source_plugin_id` cannot be changed after creation, so fields created under a different plugin ID cannot be adopted by this one — `syncSingleField()` fails with "already exists but is not managed by this plugin".
+- While the plugin is installed, only it can delete its own protected fields.
 
 ## Build & Test Commands
 
@@ -200,7 +210,8 @@ make server             # Compile Go binaries only
 make webapp             # Build webapp bundle only
 make dist               # Build and create tar.gz bundle
 make deploy             # Build + deploy to running Mattermost
-make watch              # Auto-rebuild webapp on changes
+make watch              # Rebuild the webapp bundle on change (does not deploy)
+make deploy-from-watch  # Install the bundle make watch rebuilt
 make clean              # Remove all build artifacts
 make install-go-tools   # Install golangci-lint v1.64.8, gotestsum v1.7.0 into $GOBIN
 make coverage           # Go coverage profile + open HTML report
@@ -228,7 +239,7 @@ cd e2e && npm test -- -g 'renders both attribute provider'  # by title
 
 **Generated files:** `server/manifest.go` and `webapp/src/manifest.ts` are produced by `./build/bin/manifest apply` (run automatically by most Makefile targets). Edit `plugin.json`, then `make apply` — never edit the manifest files by hand. `make manifest-check` validates the manifest.
 
-**Go module path:** `github.com/mattermost/mattermost-plugin-user-attribute-sync-testing` (internal imports use `.../server/sync`, aliased `attrsync` in `plugin.go`). Note `.golangci.yml` still carries the upstream template's `goimports.local-prefixes`, so import grouping for local packages isn't enforced.
+**Go module path:** `github.com/mattermost/mattermost-plugin-user-attribute-sync-testing` (internal imports use `.../server/sync`, aliased `attrsync` in `plugin.go`). `.golangci.yml`'s `goimports.local-prefixes` matches it, so import grouping for local packages is enforced.
 
 **Environment variables:**
 - `MM_DEBUG=1` — Debug build (disables optimizations)
@@ -252,7 +263,7 @@ cd e2e && npm test -- -g 'renders both attribute provider'  # by title
 **Webapp tests** (`webapp/src/**/*.test.tsx`):
 - Framework: **Jest 29 + React Testing Library**, matching the majority of Mattermost plugins (calls, github, gitlab, jira, zoom). Query by role, assert on what the admin can see and do; `@testing-library/jest-dom` matchers are registered globally in `tests/setup.tsx`.
 - **RTL is pinned to 12.1.5, and cannot be upgraded while this plugin is on React 17.** RTL 13+ declares `peerDependencies: react >=18`. Every RTL-using Mattermost plugin is on React 18 and therefore on RTL 14.x — do not copy their pin without moving React first.
-- Enzyme was removed (`enzyme`, `@types/enzyme`, `enzyme-adapter-react-17-updated`, `enzyme-to-json`). It had been an unconfigured devDependency since the initial commit, inherited from an older generation of the upstream starter template, which has since dropped it too. The `snapshotSerializers` entry went with it.
+- Enzyme was removed (`enzyme`, `@types/enzyme`, `enzyme-adapter-react-17-updated`, `enzyme-to-json`). It had been an unconfigured devDependency since the initial commit, inherited from the upstream template, which has since dropped it too. The `snapshotSerializers` entry went with it.
 - **Two jest resolution problems had to be solved before any component test could run**, and both are worth understanding before adding tests:
   - `mattermost-redux` (and `@mattermost/client` beneath it) expose subpaths via the `exports` field. Jest 27 predates `exports` support, so `mattermost-redux/client` was unresolvable and *nothing* importing `Client4` could be tested. **Upgrading to jest 29 fixed this natively** — no `moduleNameMapper` needed, which is why the other plugins' configs have no entry for it. This is what jest 27 was costing.
   - `react-bootstrap` is a **webpack external** — the host webapp supplies it at runtime, so it is deliberately not installed and jest cannot resolve it. `tests/react_bootstrap_mock.tsx` stands in for it via `moduleNameMapper`, implementing only the `Modal` surface `confirm_modal.tsx` uses. Any future external in `webpack.config.js` that is not also a real dependency needs the same treatment.
@@ -273,8 +284,9 @@ cd e2e && npm test -- -g 'renders both attribute provider'  # by title
 - **Graceful degradation:** Continue on partial failures; never fail entire sync for one user
 - **Interface-driven:** `AttributeProvider` enables pluggable data sources
 - **HTTP responses:** JSON via the `errorWithJSON` / `responseWithJSON` helpers in `http_hooks.go`, not hand-written `w.Write`. Download is the deliberate exception — it streams the stored bytes verbatim.
-- **Webapp:** function components with hooks, no Redux (the admin console owns the setting's value), literal strings in JSX braces per the Mattermost eslint config, and no i18n — this is a template, so strings are inline rather than translated.
+- **Webapp:** function components with hooks, no Redux (the admin console owns the setting's value), literal strings in JSX braces per the Mattermost eslint config, and no i18n — strings are inline rather than translated.
 - **No license headers.** Do not add `// Copyright (c) …` / `// See LICENSE.txt …` blocks to any file. No source file in this repo carries one, and `webapp/.eslintrc.json` sets `"header/header": "off"`. Licensing lives in `LICENSE` at the repo root.
+- **No template framing in comments.** Comments should not address a reader who is about to fork the repo or build their own plugin; that framing was swept out of the codebase and should not come back.
 
 ## Mattermost API Surface
 
