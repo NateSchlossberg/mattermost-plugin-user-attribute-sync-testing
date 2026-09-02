@@ -8,7 +8,7 @@ import (
 	"github.com/mattermost/mattermost/server/public/plugin"
 	"github.com/mattermost/mattermost/server/public/pluginapi"
 	"github.com/mattermost/mattermost/server/public/pluginapi/cluster"
-	attrsync "github.com/mattermost/user-attribute-sync-starter-template/server/sync"
+	attrsync "github.com/mattermost/mattermost-plugin-user-attribute-sync-testing/server/sync"
 	"github.com/pkg/errors"
 )
 

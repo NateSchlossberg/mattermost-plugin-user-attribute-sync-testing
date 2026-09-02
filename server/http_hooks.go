@@ -11,7 +11,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
-	"github.com/mattermost/user-attribute-sync-starter-template/server/sync"
+	"github.com/mattermost/mattermost-plugin-user-attribute-sync-testing/server/sync"
 )
 
 const (

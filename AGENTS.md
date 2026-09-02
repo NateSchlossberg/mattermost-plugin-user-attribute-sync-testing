@@ -228,7 +228,7 @@ cd e2e && npm test -- -g 'renders both attribute provider'  # by title
 
 **Generated files:** `server/manifest.go` and `webapp/src/manifest.ts` are produced by `./build/bin/manifest apply` (run automatically by most Makefile targets). Edit `plugin.json`, then `make apply` — never edit the manifest files by hand. `make manifest-check` validates the manifest.
 
-**Go module path:** `github.com/mattermost/user-attribute-sync-starter-template` (internal imports use `.../server/sync`, aliased `attrsync` in `plugin.go`). Note `.golangci.yml` still carries the upstream template's `goimports.local-prefixes`, so import grouping for local packages isn't enforced.
+**Go module path:** `github.com/mattermost/mattermost-plugin-user-attribute-sync-testing` (internal imports use `.../server/sync`, aliased `attrsync` in `plugin.go`). Note `.golangci.yml` still carries the upstream template's `goimports.local-prefixes`, so import grouping for local packages isn't enforced.
 
 **Environment variables:**
 - `MM_DEBUG=1` — Debug build (disables optimizations)

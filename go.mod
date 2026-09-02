@@ -1,4 +1,4 @@
-module github.com/mattermost/user-attribute-sync-starter-template
+module github.com/mattermost/mattermost-plugin-user-attribute-sync-testing
 
 go 1.26.3
 

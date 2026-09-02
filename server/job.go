@@ -5,7 +5,7 @@ import (
 
 	"github.com/mattermost/mattermost/server/public/pluginapi/cluster"
 
-	"github.com/mattermost/user-attribute-sync-starter-template/server/sync"
+	"github.com/mattermost/mattermost-plugin-user-attribute-sync-testing/server/sync"
 )
 
 // nextWaitInterval calculates the duration to wait before the next sync execution.

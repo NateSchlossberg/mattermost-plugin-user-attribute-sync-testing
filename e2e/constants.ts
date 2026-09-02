@@ -29,7 +29,7 @@ export const adminStorageStatePath = 'adminStorageState.json';
 //
 // Must match the "id" field in plugin.json. Every URL below is derived from it,
 // so if the two disagree the tests will 404 with no obvious explanation.
-export const pluginID = 'com.mattermost.user-attribute-sync-starter-template';
+export const pluginID = 'com.mattermost.user-attribute-sync-test-tool';
 
 // Admin console URL for this plugin's settings section. The System Console
 // derives this path from the plugin ID.
