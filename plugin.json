@@ -1,10 +1,10 @@
 {
-    "id": "com.mattermost.user-attribute-sync-starter-template",
-    "name": "User Attribute Sync Starter Template",
-    "description": "A reference implementation demonstrating how to synchronize user attributes from external systems into Mattermost, where they can be displayed on user profiles and referenced from attribute-based access control (ABAC) policies.",
-    "homepage_url": "https://github.com/mattermost/mattermost-plugin-starter-template",
-    "support_url": "https://github.com/mattermost/mattermost-plugin-starter-template/issues",
-    "icon_path": "assets/starter-template-icon.svg",
+    "id": "com.mattermost.user-attribute-sync-test-tool",
+    "name": "User Attribute Sync Test Tool",
+    "description": "A testing tool that populates user attributes in a Mattermost test environment, including protected attributes that the System Console cannot create, such as those using the source_only or shared_only access modes. Attribute values are uploaded as a file or fetched from an external source, then written to user profiles where attribute-based access control (ABAC) policies can reference them.",
+    "homepage_url": "https://github.com/mattermost/mattermost-plugin-user-attribute-sync-testing",
+    "support_url": "https://github.com/mattermost/mattermost-plugin-user-attribute-sync-testing/issues",
+    "icon_path": "assets/plugin-icon.svg",
     "min_server_version": "11.9.0",
     "server": {
         "executables": {

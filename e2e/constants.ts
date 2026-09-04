@@ -25,11 +25,9 @@ export const adminPassword = process.env.MM_ADMIN_PASSWORD || 'Sys@dmin-sample1'
 // and nothing will warn you if they drift.
 export const adminStorageStatePath = 'adminStorageState.json';
 
-// CHANGE ME WHEN YOU FORK THIS TEMPLATE.
-//
 // Must match the "id" field in plugin.json. Every URL below is derived from it,
 // so if the two disagree the tests will 404 with no obvious explanation.
-export const pluginID = 'com.mattermost.user-attribute-sync-starter-template';
+export const pluginID = 'com.mattermost.user-attribute-sync-test-tool';
 
 // Admin console URL for this plugin's settings section. The System Console
 // derives this path from the plugin ID.

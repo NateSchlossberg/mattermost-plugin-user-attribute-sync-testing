@@ -10,8 +10,8 @@ export type ProviderLabel = 'Local Filesystem' | 'Direct Upload';
 /**
  * Page object for this plugin's System Console settings section.
  *
- * If your plugin adds another surface — a channel header menu, a right-hand
- * sidebar — add a sibling file here rather than extending this one.
+ * Another part of the UI — a channel header menu, a right-hand sidebar — gets a
+ * sibling file here rather than an extension of this one.
  */
 export default class PluginSettingsPage {
     readonly page: Page;
