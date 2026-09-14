@@ -11,8 +11,7 @@ import (
 	"github.com/mattermost/mattermost-plugin-user-attribute-sync-testing/server/sync"
 )
 
-// TestRunSync covers the sync job talking directly to the KV store provider, with no provider
-// switch in between.
+// TestRunSync covers the sync job reading directly from the KV store provider.
 func TestRunSync(t *testing.T) {
 	newPlugin := func(t *testing.T) (*Plugin, *plugintest.API) {
 		t.Helper()

@@ -99,8 +99,7 @@ func (p *Plugin) OnActivate() error {
 }
 
 // OnDeactivate is invoked when the plugin is deactivated.
-// Cleans up the attribute sync cluster job. The HTTP router needs no cleanup; the server stops
-// routing to a deactivated plugin.
+// The HTTP router needs no cleanup here; the server stops routing to a deactivated plugin.
 func (p *Plugin) OnDeactivate() error {
 	if p.backgroundJob != nil {
 		if err := p.backgroundJob.Close(); err != nil {

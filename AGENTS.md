@@ -234,7 +234,7 @@ cd e2e && npm test -- -g 'renders the upload panel'  # by title
 - Mock expectations with `.On()` and `.Return()`
 - Each file has a `newTest*` helper that builds the subject against a fresh `plugintest.API` and registers `t.Cleanup(func() { api.AssertExpectations(t) })`, so unmet expectations fail the test automatically. Follow that shape for new tests.
 - `http_hooks_test.go` drives handlers through `p.ServeHTTP` with `httptest`, the same way the server does, rather than calling handler functions directly — so route registration and the permission check are covered too. It sets the `Mattermost-User-Id` header to simulate an authenticated request and mocks `HasPermissionTo` to control authorization.
-- `job_test.go` covers `runSync()` talking directly to the KV store provider, with no provider switch in between: no stored document does nothing, and a stored document reaches `SyncUsers()`.
+- `job_test.go` covers `runSync()` reading directly from the KV store provider: no stored document does nothing, and a stored document reaches `SyncUsers()`.
 
 **Webapp tests** (`webapp/src/**/*.test.tsx`):
 - Framework: **Jest 29 + React Testing Library**, matching the majority of Mattermost plugins (calls, github, gitlab, jira, zoom). Query by role, assert on what the admin can see and do; `@testing-library/jest-dom` matchers are registered globally in `tests/setup.tsx`.
