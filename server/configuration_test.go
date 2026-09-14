@@ -22,7 +22,6 @@ func TestOnConfigurationChange(t *testing.T) {
 		Run(func(args mock.Arguments) {
 			*args.Get(0).(*configuration) = configuration{
 				SyncIntervalMinutes: 30,
-				AttributeProvider:   ConfigAttributeProviderKVStore,
 			}
 		}).Return(nil).Once()
 
@@ -35,6 +34,5 @@ func TestOnConfigurationChange(t *testing.T) {
 
 	cfg := p.getConfiguration()
 	assert.Equal(t, 30, cfg.SyncIntervalMinutes)
-	assert.Equal(t, ConfigAttributeProviderKVStore, cfg.AttributeProvider)
 	assert.Nil(t, p.attributeSource, "the attribute source is OnActivate's to build, not this hook's")
 }

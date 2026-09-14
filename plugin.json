@@ -31,10 +31,9 @@
                 "placeholder": "60"
             },
             {
-                "key": "AttributeProvider",
-                "display_name": "User Attribute Source",
-                "type": "custom",
-                "default": "FileProvider"
+                "key": "Attributes",
+                "display_name": "Attributes",
+                "type": "custom"
             }
         ]
     }
