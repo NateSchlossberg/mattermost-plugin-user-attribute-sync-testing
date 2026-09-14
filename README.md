@@ -4,7 +4,7 @@ A Mattermost plugin that creates plugin-managed user attributes and fills them i
 
 Attributes created by a plugin belong to that plugin. They are marked `protected`, which means only the plugin can change their definition or write their values — admins cannot edit them, through the System Console or the REST API. The `source_only` and `shared_only` access modes are available only on attributes like these.
 
-The plugin creates four attributes in the `access_control` property group, so ABAC policies can reference them as `user.attributes.<name>`. Values come from a JSON file, either uploaded through the System Console or read from the server's filesystem.
+The plugin creates four attributes in the `access_control` property group, so ABAC policies can reference them as `user.attributes.<name>`. Values come from a JSON file uploaded through the System Console.
 
 This repository is a fork of [mattermost-plugin-user-attribute-sync-starter-template](https://github.com/mattermost/mattermost-plugin-user-attribute-sync-starter-template). If you want a minimal starting point for your own plugin, use that one instead.
 
@@ -23,7 +23,7 @@ The attributes appear in **System Console → User Attributes**, on user profile
 
 ## Requirements
 
-- Mattermost server 11.9.0 or later (the `rank` attribute type requires it)
+- Mattermost server 12.0.0 or later (the `graph` attribute type requires it)
 - An Enterprise Advanced license, for ABAC
 - Go 1.26.3 or later, to build the server binaries
 - Node v20.11, to build the webapp bundle and run the end-to-end tests
@@ -40,7 +40,6 @@ The attributes appear in **System Console → User Attributes**, on user profile
 
 2. Go to **System Console → Plugins → User Attribute Sync Test Tool** and set:
 
-   - **User Attribute Source** to *Direct Upload*
    - **Sync Interval (Minutes)** to `1`, so uploads are picked up promptly
 
    Click **Save**.
@@ -48,8 +47,6 @@ The attributes appear in **System Console → User Attributes**, on user profile
 3. Edit `data/user_attributes.json` to use the email addresses of users on your server, then upload it with **Choose File** and **Upload** in the same section.
 
 The plugin creates the attributes as soon as it activates. Uploading a file does not trigger a sync, so the values appear on the next sync — within a minute at the interval above.
-
-To load data from the server's filesystem instead of uploading it, see [Where the values come from](#where-the-values-come-from).
 
 ## The data file
 
@@ -77,27 +74,11 @@ A JSON array of objects, one per user:
 
 ## Where the values come from
 
-The **User Attribute Source** setting selects where the plugin reads the file from. Changing it does not need a restart; the next sync picks up the new source.
-
-| | Local Filesystem | Direct Upload |
-|---|---|---|
-| Reads from | `<mattermost>/data/user_attributes.json` | The plugin's key-value store |
-| You supply the file by | Copying it onto the server | Uploading it in the System Console |
-| Survives a container redeploy | Only if `<mattermost>/data` is a persistent volume | Yes, the key-value store is in the database |
-| Works on Mattermost Cloud | No | Yes |
-| Detects changes by | File modification time | A timestamp written on upload |
-
-For *Local Filesystem*, copy the file into the server's data directory:
-
-```bash
-cp data/user_attributes.json /path/to/mattermost/data/user_attributes.json
-```
-
-The path is relative to the Mattermost server's working directory, not the plugin's. `make deploy` does not put the file there.
+The plugin reads the attributes file from its key-value store, populated by uploading it in the System Console.
 
 ### Managing the uploaded file
 
-With *Direct Upload* selected, the settings section shows a panel for the stored file. It reports whether a file is present and when it was uploaded, and lets you replace, download, or delete it. Downloading returns the exact bytes that were uploaded, which is the quickest way to confirm what the plugin is working from. Deleting asks for confirmation.
+The settings section shows a panel for the stored file. It reports whether a file is present and when it was uploaded, and lets you replace, download, or delete it. Downloading returns the exact bytes that were uploaded, which is the quickest way to confirm what the plugin is working from. Deleting asks for confirmation.
 
 These buttons act immediately and do not go through the console's **Save** button.
 
@@ -127,9 +108,9 @@ curl -X POST \
 
 The plugin creates or updates the attribute definitions when it activates. Value sync runs on a background job: immediately on the very first run, then every **Sync Interval (Minutes)** after the previous run finished. The default is 60 minutes and the minimum is 1.
 
-Each source decides for itself whether anything changed — the filesystem source compares the file's modification time, the upload source compares the timestamp written when you uploaded. When nothing has changed, the sync does no work.
+The plugin compares the timestamp written when you uploaded against the timestamp of the last sync; when nothing has changed, the sync does no work.
 
-Uploading a file, or copying one onto the server, does not itself trigger a sync. The next scheduled run picks it up.
+Uploading a file does not itself trigger a sync. The next scheduled run picks it up.
 
 To sync without waiting, disable and re-enable the plugin. That rebuilds the job, which evaluates the schedule as soon as it starts and runs the sync if the interval has already elapsed since the last run. Note that the last-run time is stored in the plugin's key-value store and survives a restart, so re-enabling part-way through a long interval waits out the remainder — lower the interval first if you are in that position.
 
@@ -210,23 +191,13 @@ A rank attribute works like a select — a user holds one option — except each
 
 The ordering is what lets a policy express a threshold with `is at least` instead of listing every qualifying option, so `user.attributes.clearance >= "Secret"` matches both Secret and Top Secret. Every option on a rank attribute needs a `Rank`, and the plugin refuses to create or update the attribute otherwise.
 
-### Change the filesystem path
-
-Edit the constant in `server/sync/file_provider.go`:
-
-```go
-const defaultDataFilePath = "data/my_custom_file.json"
-```
-
-The path resolves against the Mattermost server's working directory. The upload source has no path — its data lives in the key-value store under a single key.
-
 ### Attribute types cannot change
 
 Mattermost does not allow an attribute's type to change after it is created. To change one, delete the attribute — which deletes its values — then update the definition and redeploy.
 
 ## Troubleshooting
 
-**Nothing synced.** Check the log with `make logs-watch`. The usual causes are no file uploaded, the file not being where the filesystem source looks, or emails in the file matching no user on the server. A sync that matches no users logs warnings and still finishes successfully.
+**Nothing synced.** Check the log with `make logs-watch`. The usual causes are no file uploaded, or emails in the file matching no user on the server. A sync that matches no users logs warnings and still finishes successfully.
 
 **The attributes are read-only in the System Console.** Expected. Every attribute this plugin creates is `protected`, so only the plugin can change its definition or values.
 
@@ -242,7 +213,7 @@ Mattermost does not allow an attribute's type to change after it is created. To 
 ## Planned improvements
 
 - Trigger a sync when a file is uploaded, instead of waiting for the next scheduled run.
-- Drop the scheduled job entirely in *Direct Upload* mode, where an upload is the only thing that can change the data.
+- Drop the scheduled job entirely, since an upload is the only thing that can change the data.
 - Take attribute definitions from the uploaded file, so new attributes can be created without editing Go.
 
 ## Development
@@ -253,8 +224,6 @@ Mattermost does not allow an attribute's type to change after it is created. To 
 │   ├── sync/
 │   │   ├── field_sync.go         # Attribute definitions and schema reconciliation
 │   │   ├── value_sync.go         # Writing per-user values
-│   │   ├── provider.go           # AttributeProvider interface
-│   │   ├── file_provider.go      # Reads the file from the server's filesystem
 │   │   └── kv_store_provider.go  # Reads the uploaded file from the key-value store
 │   ├── plugin.go                 # OnActivate / OnDeactivate
 │   ├── configuration.go          # Settings
@@ -263,7 +232,6 @@ Mattermost does not allow an attribute's type to change after it is created. To 
 ├── webapp/src/
 │   ├── index.tsx                 # Registers the custom admin console setting
 │   └── components/
-│       ├── attribute_provider.tsx      # The "User Attribute Source" setting
 │       ├── upload_user_attributes.tsx  # Upload / download / delete panel
 │       └── confirm_modal.tsx           # Confirmation dialog for deletion
 ├── e2e/                          # Playwright tests — see e2e/README.md
