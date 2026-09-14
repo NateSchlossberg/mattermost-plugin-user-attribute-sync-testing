@@ -26,14 +26,10 @@ type Plugin struct {
 	// backgroundJob runs attribute sync on the configured time interval.
 	backgroundJob *cluster.Job
 
-	// attributeProvider reads user attribute data from a source outside Mattermost. Either
-	// FileProvider or KVStoreProvider, decided by the AttributeProvider configuration.
-	//
-	// The sync job owns these two fields while it is scheduled, which is why neither is locked.
-	attributeProvider attrsync.AttributeProvider
-
-	// attributeProviderKind is the setting attributeProvider was built from.
-	attributeProviderKind string
+	// attributeSource reads user attribute data uploaded through the System Console. It is
+	// assigned once in OnActivate, before the sync job is scheduled, and never reassigned —
+	// only the sync job reads it, so it needs no lock.
+	attributeSource *attrsync.KVStoreProvider
 
 	// groupID is the ID of the Mattermost property group this plugin reads and writes.
 	// We use the "access_control" group because user attribute fields defined here can be
@@ -81,8 +77,7 @@ func (p *Plugin) OnActivate() error {
 	}
 	p.client.Log.Info("Field sync completed successfully")
 
-	// Note: the attribute provider is built by the sync job on its first run, not here — see
-	// ensureAttributeProvider.
+	p.attributeSource = attrsync.NewKVStoreProvider(p.client)
 
 	// Set up the attribute sync cluster job
 	// This job runs periodically to synchronize user attribute values from external
@@ -104,21 +99,12 @@ func (p *Plugin) OnActivate() error {
 }
 
 // OnDeactivate is invoked when the plugin is deactivated.
-// Cleans up the attribute sync cluster job and the attribute provider to prevent orphaned
-// resources. The HTTP router needs no cleanup; the server stops routing to a deactivated plugin.
-//
-// The order is important: cluster.Job.Close blocks until a running sync returns, which is what
-// makes it safe to close the provider here. Both providers' Close() are currently no-ops, but the
-// ordering holds for a provider that needs to release something.
+// Cleans up the attribute sync cluster job. The HTTP router needs no cleanup; the server stops
+// routing to a deactivated plugin.
 func (p *Plugin) OnDeactivate() error {
 	if p.backgroundJob != nil {
 		if err := p.backgroundJob.Close(); err != nil {
 			p.API.LogError("Failed to close attribute sync job", "err", err)
-		}
-	}
-	if p.attributeProvider != nil {
-		if err := p.attributeProvider.Close(); err != nil {
-			p.API.LogError("Failed to close file provider", "err", err)
 		}
 	}
 	return nil

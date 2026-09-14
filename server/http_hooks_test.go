@@ -33,9 +33,9 @@ func newTestPlugin(t *testing.T) (*Plugin, *plugintest.API) {
 	kvStoreProvider := sync.NewKVStoreProvider(client)
 
 	p := &Plugin{
-		MattermostPlugin:  plugin.MattermostPlugin{API: api},
-		client:            client,
-		attributeProvider: kvStoreProvider,
+		MattermostPlugin: plugin.MattermostPlugin{API: api},
+		client:           client,
+		attributeSource:  kvStoreProvider,
 	}
 	p.initializeAPI()
 

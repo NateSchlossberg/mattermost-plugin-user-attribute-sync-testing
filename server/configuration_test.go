@@ -11,9 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestOnConfigurationChange tests that the config loaded from the server is applied, and that it
-// leaves the attribute provider alone even though a setting names one — the sync job builds it,
-// see ensureAttributeProvider.
+// TestOnConfigurationChange tests that the config loaded from the server is applied.
 func TestOnConfigurationChange(t *testing.T) {
 	api := &plugintest.API{}
 	defer api.AssertExpectations(t)
@@ -38,5 +36,5 @@ func TestOnConfigurationChange(t *testing.T) {
 	cfg := p.getConfiguration()
 	assert.Equal(t, 30, cfg.SyncIntervalMinutes)
 	assert.Equal(t, ConfigAttributeProviderKVStore, cfg.AttributeProvider)
-	assert.Nil(t, p.attributeProvider, "the provider is the sync job's to build, not this hook's")
+	assert.Nil(t, p.attributeSource, "the attribute source is OnActivate's to build, not this hook's")
 }
