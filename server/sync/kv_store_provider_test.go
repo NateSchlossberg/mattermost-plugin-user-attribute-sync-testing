@@ -138,12 +138,6 @@ func TestKVStoreProvider_MalformedStoredValue(t *testing.T) {
 	assert.Contains(t, err.Error(), "malformed data")
 }
 
-// TestKVStoreProvider_Close tests that Close returns no error
-func TestKVStoreProvider_Close(t *testing.T) {
-	provider, _ := newTestKVStoreProvider(t)
-	assert.NoError(t, provider.Close())
-}
-
 // TestNewKVStoreProvider tests that the constructor holds on to the client it is given
 // And that the Processed Flag is initialized as unset.
 func TestNewKVStoreProvider(t *testing.T) {

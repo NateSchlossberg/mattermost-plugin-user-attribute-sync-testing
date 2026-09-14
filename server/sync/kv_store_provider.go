@@ -41,13 +41,12 @@ func ReadStoredUserAttrs(client *pluginapi.Client) (StoredUserAttrs, error) {
 	return stored, nil
 }
 
-// KVStoreProvider implements AttributeProvider by reading user attribute data an admin uploaded
-// through the System Console, which the plugin stores in Mattermost's KV store.  The KV Store lives in
-// Mattermost's Postgres database, which is a more stable storage location than file systems in a
-// cloud environment.
+// KVStoreProvider reads user attribute data an admin uploaded through the System Console, which
+// the plugin stores in Mattermost's KV store. The KV store lives in Mattermost's Postgres
+// database, which is a more stable storage location than file systems in a cloud environment.
 //
-// Incremental synchronization works the similar to FileProvider's, with a stored timestamp
-// standing in for the file's modification time.
+// Incremental synchronization relies on a stored timestamp: GetUserAttributes returns an empty
+// slice until the stored timestamp moves past the last one it processed.
 type KVStoreProvider struct {
 	client *pluginapi.Client
 
@@ -97,11 +96,4 @@ func (f *KVStoreProvider) GetUserAttributes() ([]map[string]interface{}, error) 
 	}
 
 	return users, nil
-}
-
-// Close releases any resources held by the provider.
-// For KVStoreProvider, this is a no-op as no persistent resources are held — the KV store is
-// reached through the shared plugin client, which the provider does not own.
-func (f *KVStoreProvider) Close() error {
-	return nil
 }
