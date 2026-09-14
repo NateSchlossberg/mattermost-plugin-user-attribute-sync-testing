@@ -2,11 +2,6 @@ import {expect, Page} from '@playwright/test';
 
 import {pluginID, pluginSettingsURL} from '../constants';
 
-// The visible labels of the AttributeProvider radios. Renaming a label in
-// attribute_provider.tsx means changing it here too; every call site is then a
-// compile error until updated.
-export type ProviderLabel = 'Local Filesystem' | 'Direct Upload';
-
 /**
  * Page object for this plugin's System Console settings section.
  *
@@ -26,10 +21,6 @@ export default class PluginSettingsPage {
     }
 
     // --- locators ----------------------------------------------------------
-
-    providerRadio(label: ProviderLabel) {
-        return this.page.getByRole('radio', {name: label});
-    }
 
     chooseFileButton() {
         return this.page.getByRole('button', {name: 'Choose File'});
@@ -88,10 +79,6 @@ export default class PluginSettingsPage {
 
     // --- actions -----------------------------------------------------------
 
-    async selectProvider(label: ProviderLabel) {
-        await this.providerRadio(label).check();
-    }
-
     async save() {
         await this.saveButton().click();
     }
@@ -118,13 +105,5 @@ export default class PluginSettingsPage {
 
     async expectNoFileOnServer() {
         await expect(this.page.getByText('No file on server')).toBeVisible();
-    }
-
-    async expectUploadControlsVisible(visible: boolean) {
-        if (visible) {
-            await expect(this.chooseFileButton()).toBeVisible();
-        } else {
-            await expect(this.chooseFileButton()).toBeHidden();
-        }
     }
 }

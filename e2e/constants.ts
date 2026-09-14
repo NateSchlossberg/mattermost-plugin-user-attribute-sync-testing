@@ -37,11 +37,6 @@ export const pluginSettingsURL = `${baseURL}/admin_console/plugins/plugin_${plug
 export const userAttributesURL = `${baseURL}/plugins/${pluginID}/user_attributes`;
 export const userAttributesStatusURL = `${userAttributesURL}/status`;
 
-// Values of the AttributeProvider setting, mirroring the constants in
-// server/configuration.go.
-export const providerFile = 'FileProvider';
-export const providerKVStore = 'KVStore';
-
 // Fixture files.
 //
 // The valid case deliberately reuses the repository's own documented sample file

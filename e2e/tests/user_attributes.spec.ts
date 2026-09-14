@@ -6,14 +6,12 @@ import {
     arrayOfArraysFile,
     malformedFile,
     notAnArrayFile,
-    providerKVStore,
     validAttributesFile,
 } from '../constants';
 import PluginSettingsPage from '../pages/plugin_settings_page';
 import {
     adminAPIContext,
     apiDeleteStoredAttributes,
-    apiSetPluginSetting,
     apiUploadStoredAttributes,
 } from '../utils';
 
@@ -23,13 +21,9 @@ const validRecordCount = 3;
 test.describe('user attributes upload and download', () => {
     test.use({storageState: adminStorageStatePath});
 
-    // The upload controls only render for the KVStore provider, and the stored file survives
-    // between tests, so both steps are needed for each test to start from a known state. The
-    // setting key is lowercased because that is how Mattermost stores plugin settings — see
-    // settings.spec.ts.
+    // The stored file survives between tests, so each one starts from a known state.
     test.beforeEach(async () => {
         const admin = await adminAPIContext();
-        await apiSetPluginSetting(admin, 'attributeprovider', providerKVStore);
         await apiDeleteStoredAttributes(admin);
         await admin.dispose();
     });

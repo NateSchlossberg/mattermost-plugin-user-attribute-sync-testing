@@ -89,29 +89,6 @@ export async function apiEnablePlugin(context: APIRequestContext) {
 }
 
 /**
- * Sets one of this plugin's settings.
- *
- * Plugin settings live in a nested map at PluginSettings.Plugins[pluginID], and
- * /api/v4/config is a whole-document PUT — there is no endpoint for patching a
- * single key. This read-modify-write of shared server state is why
- * playwright.config.ts runs a single worker.
- */
-export async function apiSetPluginSetting(context: APIRequestContext, key: string, value: unknown) {
-    const headers = await getHTTPHeaders(context);
-    const config = await (await context.get('/api/v4/config', {headers})).json();
-
-    config.PluginSettings.Plugins = {
-        ...config.PluginSettings.Plugins,
-        [pluginID]: {
-            ...config.PluginSettings.Plugins[pluginID],
-            [key]: value,
-        },
-    };
-
-    await context.put('/api/v4/config', {data: config, headers});
-}
-
-/**
  * Dismisses the tutorial and onboarding flows for the logged-in user.
  *
  * The onboarding checklist renders a transparent full-viewport overlay in
