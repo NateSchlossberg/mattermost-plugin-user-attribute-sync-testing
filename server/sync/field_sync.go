@@ -288,8 +288,6 @@ func isFieldOwnedByPlugin(
 	return false
 }
 
-// syncSingleField ensures a single user attribute field exists and matches the definition.
-// Updates the cache with field and option IDs. Returns the field ID or error.
 func syncSingleField(
 	client *pluginapi.Client,
 	groupID string,
@@ -297,13 +295,11 @@ func syncSingleField(
 	def FieldDefinition,
 	cache *FieldIDCache,
 ) (string, bool, error) {
-	// Try to get existing field
 	existingField, err := client.Property.GetPropertyFieldByName(groupID, "", def.Name)
 
 	var field *model.PropertyField
 	created := false
 	if err == nil && existingField != nil {
-		// Field exists - verify we own it before attempting to update
 		if !isFieldOwnedByPlugin(client, existingField, pluginID, def) {
 			return "", false, errors.Errorf(
 				"field %s already exists but is not managed by this plugin",
@@ -325,7 +321,6 @@ func syncSingleField(
 			}
 		}
 
-		// Field exists and we own it - update it
 		field, err = updateField(client, groupID, existingField, def, cache)
 		if err != nil {
 			return "", false, err

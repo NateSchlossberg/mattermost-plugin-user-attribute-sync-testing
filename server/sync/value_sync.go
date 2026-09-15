@@ -146,8 +146,6 @@ func buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string
 	return values, nil
 }
 
-// SyncUsers writes attribute values from external data into Mattermost user attribute fields for all users.
-//
 //nolint:revive
 func SyncUsers(api *pluginapi.Client, groupID string, users []map[string]interface{}, cache *FieldIDCache, summary *Summary) error {
 	for _, userAttrs := range users {
@@ -158,7 +156,6 @@ func SyncUsers(api *pluginapi.Client, groupID string, users []map[string]interfa
 			continue
 		}
 
-		// Find Mattermost user by email
 		user, err := api.User.GetByEmail(email)
 		if err != nil {
 			api.Log.Warn("User not found by email, skipping",
@@ -183,7 +180,6 @@ func SyncUsers(api *pluginapi.Client, groupID string, users []map[string]interfa
 			continue
 		}
 
-		// Write all values for this user to Mattermost
 		_, err = api.Property.UpsertPropertyValues(values)
 		if err != nil {
 			api.Log.Error("Failed to upsert property values, skipping user",

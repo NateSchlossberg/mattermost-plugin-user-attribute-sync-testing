@@ -56,8 +56,8 @@ type attributesStatus struct {
 	LastUpdated *time.Time `json:"lastUpdated"`
 }
 
-// handleUploadAttributes stores an uploaded attributes document in the KV store, then syncs it
-// and returns the summary. A failed sync still leaves the document stored.
+// handleUploadAttributes stores the document before syncing so a failed sync can be retried
+// on the next activation.
 func (p *Plugin) handleUploadAttributes(w http.ResponseWriter, r *http.Request) {
 	// Cap the body before reading it, so an oversized upload cannot exhaust memory
 	r.Body = http.MaxBytesReader(w, r.Body, maxFileSizeBytes)
@@ -150,9 +150,8 @@ func (p *Plugin) handleAttributesStatus(w http.ResponseWriter, r *http.Request) 
 	p.responseWithJSON(w, http.StatusOK, status)
 }
 
-// handleDeleteAttributes clears the stored document and then deletes every field
-// this plugin owns (values first, then the field). The document is removed first
-// so a half-failed field wipe cannot be reapplied on the next activation.
+// handleDeleteAttributes removes the stored document first so a half-failed field
+// wipe cannot be reapplied on the next activation.
 func (p *Plugin) handleDeleteAttributes(w http.ResponseWriter, r *http.Request) {
 	p.syncLock.Lock()
 	defer p.syncLock.Unlock()

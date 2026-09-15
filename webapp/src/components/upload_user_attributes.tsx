@@ -96,10 +96,7 @@ function describeFileStatus(fileStatus: FileStatus | null): string {
 }
 
 /**
- * UploadUserAttributes manages the attributes file that KVStoreProvider syncs from, through the
- * plugin's own HTTP API in server/http_hooks.go.
- *
- * Unlike the provider choice above it, these actions are immediate — they do not go through the
+ * Upload and delete take effect immediately — they do not go through the
  * admin console's Save button, because they are operations on stored data rather than changes to a
  * setting. That is also why they can report their own success and failure inline.
  */
@@ -235,8 +232,7 @@ export default function UploadUserAttributes({id, disabled = false}: Props) {
         }
     }
 
-    // Removes the stored document and every field this plugin owns. Only reachable through the
-    // confirmation modal; there is no copy on the server to restore from.
+    // Only reachable through the confirmation modal; there is no copy on the server to restore from.
     async function handleDelete() {
         setShowDeleteConfirm(false);
         setStatus('deleting');
@@ -266,8 +262,7 @@ export default function UploadUserAttributes({id, disabled = false}: Props) {
     }
 
     async function checkServerFileStatus() {
-        // Called on mount and after a successful upload. On mount, status starts as 'init';
-        // after upload it is already 'uploading'. Both paths finish idle.
+        // Always finish idle: mount starts as init, and upload is still uploading when this runs.
         try {
             const response = await fetch(Client4.getAbsoluteUrl(`/plugins/${manifest.id}/attributes/status`));
             const body = await response.json().catch(() => ({}));

@@ -2,7 +2,6 @@ package sync
 
 import "github.com/mattermost/mattermost/server/public/pluginapi"
 
-// Summary counts outcomes from one sync of an attributes document.
 type Summary struct {
 	FieldsCreated   int `json:"fieldsCreated"`
 	FieldsUpdated   int `json:"fieldsUpdated"`
@@ -14,9 +13,7 @@ type Summary struct {
 	ChannelsSkipped int `json:"channelsSkipped"`
 }
 
-// SyncDocument syncs fields from the document, then user values, using the
-// field-ID cache from the first pass. The cache is not returned: nothing
-// outside a single sync reads it.
+// SyncDocument does not return the field-ID cache: nothing outside a single sync reads it.
 //
 //nolint:revive
 func SyncDocument(client *pluginapi.Client, groupID, pluginID string, doc AttributesDocument) (Summary, error) {

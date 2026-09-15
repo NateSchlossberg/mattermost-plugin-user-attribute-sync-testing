@@ -392,8 +392,6 @@ func TestHandleUserAttributesStatus(t *testing.T) {
 	})
 }
 
-// TestHandleDeleteUserAttributes checks that deleting clears the stored file and
-// then wipes every field this plugin owns.
 func TestHandleDeleteUserAttributes(t *testing.T) {
 	t.Run("deletes the stored file", func(t *testing.T) {
 		p, api := newTestPlugin(t)
