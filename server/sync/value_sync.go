@@ -95,12 +95,10 @@ func buildPropertyValue(
 		formattedValue, formatErr = formatMultiselectValue(fieldName, v, cache)
 
 	case string:
-		// Based on the field type, this can be an option or just plain text.
 		fieldType := cache.GetFieldType(fieldName)
 		if fieldType == model.PropertyFieldTypeRank || fieldType == model.PropertyFieldTypeSelect {
 			formattedValue, formatErr = formatOptionValue(fieldName, v, cache)
 		} else {
-			// Text or date
 			formattedValue, formatErr = formatStringValue(v)
 		}
 

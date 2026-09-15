@@ -25,8 +25,6 @@ type AttributesDocument struct {
 	Users   []map[string]interface{} `json:"users"`
 }
 
-// ParseAttributesDocument decodes raw uploaded bytes into the document, rejecting anything that
-// is not a JSON object, carries an unsupported version, or has a malformed record.
 func ParseAttributesDocument(raw []byte) (AttributesDocument, error) {
 	var doc AttributesDocument
 	if err := json.Unmarshal(raw, &doc); err != nil {

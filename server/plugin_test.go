@@ -16,9 +16,6 @@ import (
 	"github.com/mattermost/mattermost-plugin-user-attribute-sync-testing/server/sync"
 )
 
-// TestOnActivate covers the three stored-document outcomes: a KV read error
-// fails activation; nothing stored or unparseable bytes skip field sync and
-// still activate with an empty cache.
 func TestOnActivate(t *testing.T) {
 	newPlugin := func(t *testing.T) (*Plugin, *plugintest.API) {
 		t.Helper()
@@ -46,8 +43,9 @@ func TestOnActivate(t *testing.T) {
 			Return(&model.PropertyGroup{ID: "group-id"}, nil).Once()
 	}
 
-	// LastFinished is now so the scheduled job waits instead of calling runSync
-	// immediately. Maybe: Close can win the race against the first lock.
+	// LastFinished is the current time so the scheduled job waits instead of
+	// calling runSync immediately. Close can win the race against the first
+	// lock, so the KV mocks are Maybe.
 	mockJobScheduler := func(api *plugintest.API) {
 		meta, err := json.Marshal(struct{ LastFinished time.Time }{LastFinished: time.Now()})
 		require.NoError(t, err)
