@@ -21,8 +21,8 @@ func TestParseAttributesDocument_ValidDocument(t *testing.T) {
 	assert.Equal(t, "Sales", users[1]["job_title"])
 }
 
-// TestParseAttributesDocument_BareArrayRejected tests that the previous format — a bare JSON
-// array of user records — is no longer accepted.
+// TestParseAttributesDocument_BareArrayRejected tests that a bare JSON array of user records is
+// rejected; only the versioned document format is accepted.
 func TestParseAttributesDocument_BareArrayRejected(t *testing.T) {
 	users, err := ParseAttributesDocument([]byte(`[{"email": "user1@example.com"}]`))
 
