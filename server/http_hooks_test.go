@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -156,7 +157,7 @@ func TestUserAttributesAccessControl(t *testing.T) {
 // reasons a request can fail for (truncated JSON, the old bare-array format, null, too large, and
 // a KV write that did not take).
 func TestHandleUploadUserAttributes(t *testing.T) {
-	validFile := []byte(`{"version": 2, "users": [{"email":"user1@example.com","job_title":"Engineer"}]}`)
+	validFile := []byte(`{"version": 2, "fields": {"user": [{"name": "job_title", "display_name": "Job Title", "type": "text"}]}, "users": [{"email":"user1@example.com","job_title":"Engineer"}]}`)
 
 	t.Run("stores the uploaded document verbatim", func(t *testing.T) {
 		p, api := newTestPlugin(t)
@@ -165,15 +166,48 @@ func TestHandleUploadUserAttributes(t *testing.T) {
 		asSysadmin(api, userID)
 		api.On("KVSetWithOptions", sync.AttributesStoreKey, storesFile(validFile), model.PluginKVSetOptions{}).
 			Return(true, nil).Once()
+		api.On("KVGet", sync.AttributesStoreKey).Return(storedValue(t, time.Now(), validFile), nil).Once()
+		api.On("GetPropertyFieldByName", "group-id", "", "job_title").Return(nil, errors.New("not found")).Once()
+		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
+			return f.Name == "job_title"
+		})).Return(&model.PropertyField{ID: "field-1", Name: "job_title", Type: model.PropertyFieldTypeText}, nil)
+		api.On("SearchPropertyFields", "group-id", mock.Anything).Return([]*model.PropertyField{}, nil)
+		api.On("GetUserByEmail", "user1@example.com").Return(&model.User{Id: "user1", Email: "user1@example.com"}, nil)
+		api.On("UpsertPropertyValues", mock.Anything).Return([]*model.PropertyValue{}, nil)
 
 		resp := doRequest(t, p, http.MethodPost, "/attributes", userID, validFile)
 		require.Equal(t, http.StatusCreated, resp.StatusCode)
 
-		var body attributesStatus
+		var body sync.Summary
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-		require.True(t, body.Exists)
-		// Not checking exact time since it is determined by the handler.
-		require.NotNil(t, body.LastUpdated)
+		require.Equal(t, 1, body.FieldsCreated)
+		require.Equal(t, 0, body.FieldsUpdated)
+		require.Equal(t, 0, body.FieldsDeleted)
+		require.Equal(t, 0, body.FieldsSkipped)
+		require.Equal(t, 1, body.UsersSynced)
+		require.Equal(t, 0, body.UsersSkipped)
+		require.Equal(t, 0, body.ChannelsSynced)
+		require.Equal(t, 0, body.ChannelsSkipped)
+	})
+
+	t.Run("stores the document when sync fails", func(t *testing.T) {
+		p, api := newTestPlugin(t)
+
+		userID := model.NewId()
+		asSysadmin(api, userID)
+		api.On("KVSetWithOptions", sync.AttributesStoreKey, storesFile(validFile), model.PluginKVSetOptions{}).
+			Return(true, nil).Once()
+		api.On("KVGet", sync.AttributesStoreKey).
+			Return(nil, model.NewAppError("KVGet", "kv.get.app_error", nil, "connection refused", http.StatusInternalServerError)).Once()
+
+		resp := doRequest(t, p, http.MethodPost, "/attributes", userID, validFile)
+		require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+
+		var body struct {
+			Error string `json:"error"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+		require.Contains(t, body.Error, "document stored but sync failed:")
 	})
 
 	t.Run("rejects truncated json", func(t *testing.T) {

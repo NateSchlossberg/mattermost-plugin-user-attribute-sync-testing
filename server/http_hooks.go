@@ -56,8 +56,8 @@ type attributesStatus struct {
 	LastUpdated *time.Time `json:"lastUpdated"`
 }
 
-// handleUploadAttributes stores an uploaded attributes document in the KV store, where
-// KVStoreProvider will find it on the next sync.
+// handleUploadAttributes stores an uploaded attributes document in the KV store, then syncs it
+// and returns the summary. A failed sync still leaves the document stored.
 func (p *Plugin) handleUploadAttributes(w http.ResponseWriter, r *http.Request) {
 	// Cap the body before reading it, so an oversized upload cannot exhaust memory
 	r.Body = http.MaxBytesReader(w, r.Body, maxFileSizeBytes)
@@ -101,9 +101,15 @@ func (p *Plugin) handleUploadAttributes(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Acknowledge with the resulting state, in the same shape the status endpoint uses, so the
-	// webapp can show the new timestamp without asking for it again.
-	p.responseWithJSON(w, http.StatusCreated, attributesStatus{Exists: true, LastUpdated: &uploadedAt})
+	summary, err := p.runSync()
+	if err != nil {
+		p.client.Log.Error("stored attributes document but sync failed", "err", err)
+		p.errorWithJSON(w, http.StatusInternalServerError,
+			fmt.Sprintf("document stored but sync failed: %s", err))
+		return
+	}
+
+	p.responseWithJSON(w, http.StatusCreated, summary)
 }
 
 // handleDownloadAttributes returns the stored attributes document verbatim, so an admin can see
