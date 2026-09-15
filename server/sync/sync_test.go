@@ -42,7 +42,6 @@ func TestSyncDocument(t *testing.T) {
 	t.Run("creates a field then writes a value for it in one call", func(t *testing.T) {
 		client, api := newTestSyncClient(t)
 
-		api.On("GetPropertyFieldByName", groupID, "", "job_title").Return(nil, errors.New("not found")).Once()
 		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
 			return f.Name == "job_title" && f.ID == ""
 		})).Return(&model.PropertyField{ID: "generated_id_1", Name: "job_title", Type: model.PropertyFieldTypeText}, nil)
@@ -84,8 +83,6 @@ func TestSyncDocument(t *testing.T) {
 	t.Run("nil error still reports skipped fields and users", func(t *testing.T) {
 		client, api := newTestSyncClient(t)
 
-		api.On("GetPropertyFieldByName", groupID, "", "job_title").Return(nil, errors.New("not found")).Once()
-		api.On("GetPropertyFieldByName", groupID, "", "broken").Return(nil, errors.New("not found")).Once()
 		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
 			return f.Name == "job_title"
 		})).Return(&model.PropertyField{ID: "generated_id_1", Name: "job_title", Type: model.PropertyFieldTypeText}, nil)

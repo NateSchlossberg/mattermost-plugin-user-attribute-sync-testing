@@ -177,6 +177,7 @@ func buildOptionsArr(def FieldDefinition, cache *FieldIDCache) ([]interface{}, e
 func createField(
 	client *pluginapi.Client,
 	groupID string,
+	objectType string,
 	def FieldDefinition,
 ) (*model.PropertyField, error) {
 	client.Log.Info("Field does not exist, creating", "name", def.Name)
@@ -194,13 +195,12 @@ func createField(
 		PermissionValues:  def.permissionValues(),
 		PermissionOptions: def.permissionOptions(),
 
-		// ObjectType declares what kind of object this field describes. This is a
-		// user attribute sync plugin, so every field describes users and we pin
-		// ObjectType to "user". Mattermost uses this to route field queries — for
+		// ObjectType declares what kind of object this field describes ("user"
+		// or "channel"). Mattermost uses it to route field queries — for
 		// example, the user-profile UI asks for fields with ObjectType=user, and
 		// ABAC policy evaluation looks up user.attributes.<field> against the
 		// same set.
-		ObjectType: model.PropertyFieldObjectTypeUser,
+		ObjectType: objectType,
 
 		// TargetType declares the scope at which the field definition lives.
 		// "system" means the field is defined once globally and applies to every
@@ -288,18 +288,20 @@ func isFieldOwnedByPlugin(
 	return false
 }
 
+// syncSingleField creates or updates one field. existingField is the lookup
+// result for def.Name, nil when no field of that name and object type exists.
 func syncSingleField(
 	client *pluginapi.Client,
 	groupID string,
 	pluginID string,
+	objectType string,
 	def FieldDefinition,
+	existingField *model.PropertyField,
 	cache *FieldIDCache,
 ) (string, bool, error) {
-	existingField, err := client.Property.GetPropertyFieldByName(groupID, "", def.Name)
-
 	var field *model.PropertyField
 	created := false
-	if err == nil && existingField != nil {
+	if existingField != nil {
 		if !isFieldOwnedByPlugin(client, existingField, pluginID, def) {
 			return "", false, errors.Errorf(
 				"field %s already exists but is not managed by this plugin",
@@ -312,7 +314,7 @@ func syncSingleField(
 		// ones and every stored user value is left pointing at an option that no
 		// longer exists.
 		if def.Type.SupportsOptions() && len(def.Options) > 0 {
-			if err = extractOptionIDs(client, existingField, def, cache); err != nil {
+			if err := extractOptionIDs(client, existingField, def, cache); err != nil {
 				client.Log.Warn("Failed to read existing option IDs",
 					"name", def.Name,
 					"field_id", existingField.ID,
@@ -321,12 +323,14 @@ func syncSingleField(
 			}
 		}
 
+		var err error
 		field, err = updateField(client, groupID, existingField, def, cache)
 		if err != nil {
 			return "", false, err
 		}
 	} else {
-		field, err = createField(client, groupID, def)
+		var err error
+		field, err = createField(client, groupID, objectType, def)
 		if err != nil {
 			return "", false, err
 		}
@@ -396,28 +400,47 @@ func extractOptionIDs(
 }
 
 //nolint:revive
-func SyncFields(client *pluginapi.Client, groupID, pluginID string, defs []FieldDefinition, summary *Summary) (*FieldIDCache, error) {
+func SyncFields(client *pluginapi.Client, groupID, pluginID, objectType string, defs []FieldDefinition, summary *Summary) (*FieldIDCache, error) {
 	client.Log.Info("Syncing field definitions", "field_count", len(defs))
 
 	cache := NewFieldIDCache()
 
 	var failedFields []string
 
-	for _, def := range defs {
-		_, created, err := syncSingleField(client, groupID, pluginID, def, cache)
-		if err != nil {
-			client.Log.Error("Failed to sync field",
-				"name", def.Name,
-				"error", err.Error())
+	// GetPropertyFieldByName is not object-type aware, so existing fields are
+	// looked up with an ObjectTypes-filtered search instead. A failed search is
+	// not "the fields do not exist" — creating anyway would duplicate them — so
+	// every def is skipped.
+	fields, err := searchGroupFields(client, groupID, []string{objectType})
+	if err != nil {
+		client.Log.Error("Failed to look up existing fields, skipping field sync",
+			"object_type", objectType,
+			"error", err.Error())
+		for _, def := range defs {
 			failedFields = append(failedFields, def.Name)
-			continue
 		}
-		if created {
-			summary.FieldsCreated++
-		} else {
-			summary.FieldsUpdated++
+	} else {
+		existing := make(map[string]*model.PropertyField, len(fields))
+		for _, field := range fields {
+			existing[field.Name] = field
 		}
-		cache.FieldNameToType[def.Name] = def.Type
+
+		for _, def := range defs {
+			_, created, err := syncSingleField(client, groupID, pluginID, objectType, def, existing[def.Name], cache)
+			if err != nil {
+				client.Log.Error("Failed to sync field",
+					"name", def.Name,
+					"error", err.Error())
+				failedFields = append(failedFields, def.Name)
+				continue
+			}
+			if created {
+				summary.FieldsCreated++
+			} else {
+				summary.FieldsUpdated++
+			}
+			cache.FieldNameToType[def.Name] = def.Type
+		}
 	}
 
 	if len(failedFields) > 0 {
@@ -440,6 +463,34 @@ func SyncFields(client *pluginapi.Client, groupID, pluginID string, defs []Field
 
 const fieldSearchPerPage = 100
 
+// searchGroupFields pages through every field in the group whose object type is
+// in objectTypes. An empty objectTypes returns every field in the group.
+func searchGroupFields(client *pluginapi.Client, groupID string, objectTypes []string) ([]*model.PropertyField, error) {
+	var all []*model.PropertyField
+	var cursor model.PropertyFieldSearchCursor
+	for {
+		opts := model.PropertyFieldSearchOpts{
+			PerPage:     fieldSearchPerPage,
+			ObjectTypes: objectTypes,
+			Cursor:      cursor,
+		}
+		fields, err := client.Property.SearchPropertyFields(groupID, opts)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to search property fields")
+		}
+		all = append(all, fields...)
+
+		if len(fields) < fieldSearchPerPage {
+			return all, nil
+		}
+		last := fields[len(fields)-1]
+		cursor = model.PropertyFieldSearchCursor{
+			PropertyFieldID: last.ID,
+			CreateAt:        last.CreateAt,
+		}
+	}
+}
+
 // Values are deleted before the field so the server can authorize the value
 // delete against a live field.
 func DeleteOmittedFields(client *pluginapi.Client, groupID, pluginID string, defs []FieldDefinition, summary *Summary) {
@@ -448,59 +499,43 @@ func DeleteOmittedFields(client *pluginapi.Client, groupID, pluginID string, def
 		named[def.Name] = struct{}{}
 	}
 
-	var cursor model.PropertyFieldSearchCursor
-	for {
-		opts := model.PropertyFieldSearchOpts{
-			PerPage: fieldSearchPerPage,
-			Cursor:  cursor,
+	fields, err := searchGroupFields(client, groupID, nil)
+	if err != nil {
+		client.Log.Error("Failed to search property fields for deletion", "error", err.Error())
+		return
+	}
+
+	for _, field := range fields {
+		if _, keep := named[field.Name]; keep {
+			continue
 		}
-		fields, err := client.Property.SearchPropertyFields(groupID, opts)
-		if err != nil {
-			client.Log.Error("Failed to search property fields for deletion", "error", err.Error())
-			return
-		}
 
-		for _, field := range fields {
-			if _, keep := named[field.Name]; keep {
-				continue
-			}
-
-			owner := fieldSourcePluginID(field)
-			if owner != pluginID {
-				client.Log.Debug("Skipping field not owned by this plugin",
-					"field_name", field.Name,
-					"field_id", field.ID,
-					"owner_plugin_id", owner)
-				continue
-			}
-
-			if err := client.Property.DeletePropertyValuesForField(groupID, field.ID); err != nil {
-				client.Log.Error("Failed to delete values for omitted field",
-					"field_name", field.Name,
-					"field_id", field.ID,
-					"error", err.Error())
-				continue
-			}
-			if err := client.Property.DeletePropertyField(groupID, field.ID); err != nil {
-				client.Log.Error("Failed to delete omitted field",
-					"field_name", field.Name,
-					"field_id", field.ID,
-					"error", err.Error())
-				continue
-			}
-			summary.FieldsDeleted++
-			client.Log.Info("Deleted omitted field",
+		owner := fieldSourcePluginID(field)
+		if owner != pluginID {
+			client.Log.Debug("Skipping field not owned by this plugin",
 				"field_name", field.Name,
-				"field_id", field.ID)
+				"field_id", field.ID,
+				"owner_plugin_id", owner)
+			continue
 		}
 
-		if len(fields) < fieldSearchPerPage {
-			return
+		if err := client.Property.DeletePropertyValuesForField(groupID, field.ID); err != nil {
+			client.Log.Error("Failed to delete values for omitted field",
+				"field_name", field.Name,
+				"field_id", field.ID,
+				"error", err.Error())
+			continue
 		}
-		last := fields[len(fields)-1]
-		cursor = model.PropertyFieldSearchCursor{
-			PropertyFieldID: last.ID,
-			CreateAt:        last.CreateAt,
+		if err := client.Property.DeletePropertyField(groupID, field.ID); err != nil {
+			client.Log.Error("Failed to delete omitted field",
+				"field_name", field.Name,
+				"field_id", field.ID,
+				"error", err.Error())
+			continue
 		}
+		summary.FieldsDeleted++
+		client.Log.Info("Deleted omitted field",
+			"field_name", field.Name,
+			"field_id", field.ID)
 	}
 }

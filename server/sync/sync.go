@@ -1,6 +1,9 @@
 package sync
 
-import "github.com/mattermost/mattermost/server/public/pluginapi"
+import (
+	"github.com/mattermost/mattermost/server/public/model"
+	"github.com/mattermost/mattermost/server/public/pluginapi"
+)
 
 type Summary struct {
 	FieldsCreated   int `json:"fieldsCreated"`
@@ -19,7 +22,7 @@ type Summary struct {
 func SyncDocument(client *pluginapi.Client, groupID, pluginID string, doc AttributesDocument) (Summary, error) {
 	var summary Summary
 
-	cache, err := SyncFields(client, groupID, pluginID, doc.Fields.User, &summary)
+	cache, err := SyncFields(client, groupID, pluginID, model.PropertyFieldObjectTypeUser, doc.Fields.User, &summary)
 	if err != nil {
 		return summary, err
 	}

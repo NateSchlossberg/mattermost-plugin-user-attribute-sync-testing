@@ -8,7 +8,6 @@ import (
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
@@ -41,7 +40,6 @@ func TestOnActivate(t *testing.T) {
 		t.Helper()
 		fail := func(mock.Arguments) { t.Fatal("SyncFields must not run") }
 		api.On("LogInfo", "Syncing field definitions", mock.Anything, mock.Anything).Run(fail).Maybe()
-		api.On("GetPropertyFieldByName", mock.Anything, mock.Anything, mock.Anything).Run(fail).Maybe()
 		api.On("SearchPropertyFields", mock.Anything, mock.Anything).Run(fail).Maybe()
 	}
 
@@ -85,7 +83,6 @@ func TestOnActivate(t *testing.T) {
 		mockPropertyGroup(api)
 		api.On("KVGet", sync.AttributesStoreKey).
 			Return(storedValue(t, time.Now(), []byte(`{"version": 2, "fields": {"user": [{"name": "job_title", "display_name": "Job Title", "type": "text"}]}, "users": [{"email":"user1@example.com", "job_title": "Engineer"}]}`)), nil).Once()
-		api.On("GetPropertyFieldByName", "group-id", "", "job_title").Return(nil, assert.AnError).Once()
 		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
 			return f.Name == "job_title"
 		})).Return(&model.PropertyField{ID: "field-1", Name: "job_title", Type: model.PropertyFieldTypeText}, nil)

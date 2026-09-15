@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -167,7 +166,6 @@ func TestHandleUploadUserAttributes(t *testing.T) {
 		api.On("KVSetWithOptions", sync.AttributesStoreKey, storesFile(validFile), model.PluginKVSetOptions{}).
 			Return(true, nil).Once()
 		api.On("KVGet", sync.AttributesStoreKey).Return(storedValue(t, time.Now(), validFile), nil).Once()
-		api.On("GetPropertyFieldByName", "group-id", "", "job_title").Return(nil, errors.New("not found")).Once()
 		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
 			return f.Name == "job_title"
 		})).Return(&model.PropertyField{ID: "field-1", Name: "job_title", Type: model.PropertyFieldTypeText}, nil)
