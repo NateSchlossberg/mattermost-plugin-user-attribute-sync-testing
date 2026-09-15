@@ -4,11 +4,13 @@ A Mattermost plugin that creates plugin-managed user attributes and fills them i
 
 Attributes created by a plugin belong to that plugin. They are marked `protected`, which means only the plugin can change their definition or write their values — admins cannot edit them, through the System Console or the REST API. The `source_only` and `shared_only` access modes are available only on attributes like these.
 
-The plugin creates four attributes in the `access_control` property group, so ABAC policies can reference them as `user.attributes.<name>`. Values come from a JSON file uploaded through the System Console.
+Field definitions and values both come from a JSON file uploaded through the System Console. The attributes live in the `access_control` property group, so ABAC policies can reference them as `user.attributes.<name>`.
 
 This repository is a fork of [mattermost-plugin-user-attribute-sync-starter-template](https://github.com/mattermost/mattermost-plugin-user-attribute-sync-starter-template). If you want a minimal starting point for your own plugin, use that one instead.
 
 ## What it creates
+
+The example file `data/attributes.json` defines four attributes. Edit that file (or upload a different document) to change the set.
 
 | Attribute | Type | Access mode | What it exercises |
 |---|---|---|---|
@@ -17,7 +19,7 @@ This repository is a fork of [mattermost-plugin-user-attribute-sync-starter-temp
 | `clearance` | rank | `shared_only` | Ordered levels, so policies can say `is at least` |
 | `start_date` | date | `source_only` | No one reads it through the API, not even the user themselves |
 
-All four are `protected` and use `visibility: always`. `job_title` is public, so everyone can read it — it is still plugin-managed, and still not editable by an admin.
+Every attribute this plugin creates is `protected` (not settable in the document — always `true`), which is what makes `source_only` and `shared_only` legal. The example fields use `visibility: always`. `job_title` is public, so everyone can read it — it is still plugin-managed, and still not editable by an admin.
 
 The attributes appear in **System Console → User Attributes**, on user profiles, and in the ABAC policy editor.
 
@@ -46,33 +48,50 @@ The attributes appear in **System Console → User Attributes**, on user profile
 
 3. Edit `data/attributes.json` to use the email addresses of users on your server, then upload it with **Choose File** and **Upload** in the same section.
 
-The plugin creates the attributes as soon as it activates. Uploading a file does not trigger a sync, so the values appear on the next sync — within a minute at the interval above.
+With nothing uploaded, activation does not create or delete attributes — a first install, or a restart after the stored file was deleted, must not tear down fields nobody asked to remove. After you upload, disable and re-enable the plugin so it applies the document's field list. Uploading a file does not trigger a sync, so the values appear on the next scheduled run — within a minute at the interval above.
 
 ## The data file
 
-A JSON document with a `version` and a `users` array, one record per user:
+A JSON document with a `version`, a `fields.user` list, and a `users` array:
 
 ```json
 {
   "version": 2,
+  "fields": {
+    "user": [
+      {
+        "name": "job_title",
+        "display_name": "Job Title",
+        "type": "text",
+        "access_mode": "public"
+      }
+    ]
+  },
   "users": [
     {
       "email": "john.doe@example.com",
-      "job_title": "Software Engineer",
-      "programs": ["Apples", "Oranges"],
-      "clearance": "Top Secret",
-      "start_date": "2023-01-15"
+      "job_title": "Software Engineer"
     }
   ]
 }
 ```
 
-`data/attributes.json` in this repository is an example of the format. Replace the email addresses with your own test users before uploading it. Its `fields` key describes the same four attributes listed above, but the plugin does not read it yet: attribute definitions still come from `server/sync/field_sync.go`, and only `version` and `users` are used. `version` must be `2` — an older upload in the bare-array format is rejected.
+`data/attributes.json` in this repository is an example of the format — the four attributes in **What it creates** live there, not in Go. Replace the email addresses with your own test users before uploading it. `version` must be `2` — an older upload in the bare-array format is rejected.
+
+The uploaded document is the full list of fields this plugin owns. A field it previously created that the document omits is deleted along with its values the next time field sync runs (plugin activation). Fields owned by an admin or another plugin are left alone. It is not the full list of values: a user the document does not mention keeps whatever they already have. Values disappear only when their field does.
+
+`visibility`, `access_mode`, `permission_field`, `permission_values`, and `permission_options` are optional. If omitted they default to visibility `always`, access mode `public`, and permission levels `sysadmin`. Accepted values:
+
+- visibility: `always` / `hidden` / `when_set`
+- access mode: `public` / `source_only` / `shared_only`
+- permission levels: `none` / `sysadmin` / `member` / `admin`
+
+`shared_only` with `permission_values: member` is a combination the server rejects. A rejected field is skipped and logged; the rest of the document still syncs. `protected` is not a document field — it is always `true`.
 
 - `email` matches the record to a Mattermost user. It is never written as an attribute.
-- Every other key is an attribute name from the definitions in `server/sync/field_sync.go`. Keys that do not match a known attribute are skipped with a warning in the logs.
+- Every other key on a user record is an attribute `name` from `fields.user`. Keys that do not match a field in that list are skipped with a warning in the logs.
 - Text and date values are strings; dates use `YYYY-MM-DD`.
-- Multiselect values are an array of option names. Rank and select values are a single option name. Option names are translated to the option IDs Mattermost generated when it created the attribute, so they have to match the definitions exactly.
+- Multiselect values are an array of option names. Rank and select values are a single option name. Option names are translated to the option IDs Mattermost generated when it created the attribute, so they have to match the field's `options` exactly.
 - Records whose email matches no user are skipped, as are individual values that fail to convert. The rest of the file still syncs.
 
 ## Where the values come from
@@ -109,7 +128,7 @@ curl -X POST \
 
 ## How syncing works
 
-The plugin creates or updates the attribute definitions when it activates. Value sync runs on a background job: immediately on the very first run, then every **Sync Interval (Minutes)** after the previous run finished. The default is 60 minutes and the minimum is 1.
+If a document is stored, the plugin applies its `fields.user` list when it activates: create, update, or delete this plugin's fields. With no document stored, activation skips field sync entirely. Value sync runs on a background job: immediately on the very first run, then every **Sync Interval (Minutes)** after the previous run finished. The default is 60 minutes and the minimum is 1.
 
 The plugin compares the timestamp written when you uploaded against the timestamp of the last sync; when nothing has changed, the sync does no work.
 
@@ -141,62 +160,64 @@ Access mode is separate from `visibility`, which only controls whether values ar
 
 ## Changing which attributes it creates
 
-Attribute definitions live in the `fieldDefinitions` array in `server/sync/field_sync.go`. After editing them, run `make deploy` — the plugin reconciles the definitions on activation.
+Attribute definitions live in `fields.user` in the uploaded document. Edit `data/attributes.json` (or whatever you upload), then upload it and disable and re-enable the plugin so field sync runs.
 
 ### Add an attribute
 
-```go
+```json
 {
-    Name:        "department",
-    DisplayName: "Department",
-    Type:        model.PropertyFieldTypeText,
-    AccessMode:  model.PropertyAccessModePublic,
-},
+  "name": "department",
+  "display_name": "Department",
+  "type": "text",
+  "access_mode": "public"
+}
 ```
 
-`Name` is the identifier used as the key in the data file and as `user.attributes.<name>` in ABAC policies, so it must be a valid CEL identifier — no spaces or punctuation. `DisplayName` is the label shown in the UI.
+`name` is the identifier used as the key on user records and as `user.attributes.<name>` in ABAC policies, so it must be a valid CEL identifier — no spaces or punctuation. `display_name` is the label shown in the UI.
 
 ### Change select or multiselect options
 
-```go
+```json
 {
-    Name:        "programs",
-    DisplayName: "Programs",
-    Type:        model.PropertyFieldTypeMultiselect,
-    Options: []model.CustomProfileAttributesSelectOption{
-        {Name: "Apples"},
-        {Name: "Oranges"},
-        {Name: "Lemons"},
-        {Name: "Bananas"},
-    },
-},
+  "name": "programs",
+  "display_name": "Programs",
+  "type": "multiselect",
+  "access_mode": "shared_only",
+  "options": [
+    {"name": "Apples"},
+    {"name": "Oranges"},
+    {"name": "Lemons"},
+    {"name": "Bananas"}
+  ]
+}
 ```
 
-Mattermost generates an ID for each option and stores values as those IDs. The plugin reads the IDs back and translates names from the data file when it writes values. Existing options are never removed, because users may already hold those values.
+Mattermost generates an ID for each option and stores values as those IDs. The plugin reads the IDs back and translates names from the data file when it writes values.
 
 ### Add a rank attribute
 
 A rank attribute works like a select — a user holds one option — except each option carries an integer that defines the ordering:
 
-```go
+```json
 {
-    Name:        "clearance",
-    DisplayName: "Clearance",
-    Type:        model.PropertyFieldTypeRank,
-    Options: []model.CustomProfileAttributesSelectOption{
-        {Name: "CUI", Rank: model.NewPointer(1)},
-        {Name: "Confidential", Rank: model.NewPointer(2)},
-        {Name: "Secret", Rank: model.NewPointer(3)},
-        {Name: "Top Secret", Rank: model.NewPointer(4)},
-    },
-},
+  "name": "clearance",
+  "display_name": "Clearance",
+  "type": "rank",
+  "access_mode": "shared_only",
+  "options": [
+    {"name": "CUI", "rank": 1},
+    {"name": "Confidential", "rank": 2},
+    {"name": "Secret", "rank": 3},
+    {"name": "Top Secret", "rank": 4}
+  ]
+}
 ```
 
-The ordering is what lets a policy express a threshold with `is at least` instead of listing every qualifying option, so `user.attributes.clearance >= "Secret"` matches both Secret and Top Secret. Every option on a rank attribute needs a `Rank`, and the plugin refuses to create or update the attribute otherwise.
+The ordering is what lets a policy express a threshold with `is at least` instead of listing every qualifying option, so `user.attributes.clearance >= "Secret"` matches both Secret and Top Secret. Every option on a rank attribute needs a `rank`, and the plugin refuses to create or update the attribute otherwise.
 
 ### Attribute types cannot change
 
-Mattermost does not allow an attribute's type to change after it is created. To change one, delete the attribute — which deletes its values — then update the definition and redeploy.
+Mattermost does not allow an attribute's type to change after it is created. To change one, upload a document that omits the field — which deletes it and its values on the next field sync — then upload again with the new type.
 
 ## Troubleshooting
 
@@ -208,7 +229,6 @@ Mattermost does not allow an attribute's type to change after it is created. To 
 
 ## Limitations
 
-- Attribute definitions are hardcoded in `server/sync/field_sync.go`. The data file supplies values only, so adding or changing an attribute means editing Go and redeploying.
 - Uploading a file does not trigger a sync; it happens on the next scheduled run.
 - Users are matched by email address only.
 - When a file changes, every record in it is synced again. There is no per-record diffing.
@@ -217,7 +237,6 @@ Mattermost does not allow an attribute's type to change after it is created. To 
 
 - Trigger a sync when a file is uploaded, instead of waiting for the next scheduled run.
 - Drop the scheduled job entirely, since an upload is the only thing that can change the data.
-- Take attribute definitions from the uploaded file, so new attributes can be created without editing Go.
 
 ## Development
 
@@ -225,7 +244,7 @@ Mattermost does not allow an attribute's type to change after it is created. To 
 .
 ├── server/
 │   ├── sync/
-│   │   ├── field_sync.go         # Attribute definitions and schema reconciliation
+│   │   ├── field_sync.go         # Schema reconciliation from the uploaded document
 │   │   ├── value_sync.go         # Writing per-user values
 │   │   ├── document.go           # Parses the uploaded document, shared by upload and sync
 │   │   └── kv_store_provider.go  # Reads the uploaded document from the key-value store

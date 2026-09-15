@@ -20,7 +20,7 @@ It ships **one data source**: a JSON file uploaded through the System Console in
 ```text
 Plugin Activation (Once)
   ├─> Register HTTP routes (mux router on ServeHTTP)
-  ├─> Create/Update User Attribute Fields (schema)
+  ├─> If a document is stored: sync fields from `fields.user` (create / update / delete plugin-owned)
   └─> Start Background Job (cluster-aware)
 
 Background Job (Configurable interval, default 60min)
@@ -34,7 +34,7 @@ System Console (Admin, on demand)
 ```
 
 The plugin has two sync phases:
-1. **Field sync** — Creates/updates field definitions (schema) in Mattermost on activation
+1. **Field sync** — On activation, if a document is stored, applies `fields.user` as this plugin's schema (create/update, and delete plugin-owned fields the document omits). With no document, skips entirely.
 2. **Value sync** — Periodically fetches user data from the KV store and writes per-user values
 
 Plus a third, admin-driven path that is not sync at all: the custom System Console setting, which manages the stored data file over the plugin's own HTTP API.
@@ -51,9 +51,9 @@ All fields and values are stored in the `access_control` property group (`model.
 | `server/http_hooks.go` | `ServeHTTP` + `initializeAPI()`. The `gorilla/mux` router and the four `/attributes` handlers, the sysadmin permission check, and the JSON response helpers. |
 | `server/job.go` | Cluster-aware job scheduling via `cluster.Schedule()`. Contains `nextWaitInterval()` (calculates delay) and `runSync()` (executes the sync by fetching from the plugin's `KVStoreProvider` and calling `sync.SyncUsers()`). |
 | `server/configuration.go` | Thread-safe config management with RWMutex. Settings: `SyncIntervalMinutes` (default 60). |
-| `server/sync/field_sync.go` | Field definitions array and schema management. Creates/updates user attribute fields. Maintains `FieldIDCache` mapping external names to Mattermost-generated IDs. |
+| `server/sync/field_sync.go` | Schema reconciliation from the stored document's `fields.user`. Creates/updates user attribute fields and deletes plugin-owned fields the document omits. Maintains `FieldIDCache` mapping external names to Mattermost-generated IDs and declared types. |
 | `server/sync/value_sync.go` | `SyncUsers()` — matches users by email, builds PropertyValue objects, bulk upserts. Handles text, date, multiselect, and rank value types. |
-| `server/sync/document.go` | `ParseAttributesDocument()` decodes the uploaded bytes into the document's `users` records, rejecting anything that is not a JSON object or carries an unsupported `version`. The one parser shared by the upload handler and `KVStoreProvider`, so the two cannot disagree about what a valid document is. |
+| `server/sync/document.go` | `ParseAttributesDocument()` decodes the uploaded bytes into `version`, `fields.user`, and `users`, rejecting anything that is not a JSON object or carries an unsupported `version`. The one parser shared by the upload handler and `KVStoreProvider`, so the two cannot disagree about what a valid document is. |
 | `server/sync/kv_store_provider.go` | `KVStoreProvider` reads the document uploaded via the HTTP API out of the plugin KV store. Owns the KV key (`AttributesStoreKey`), the `StoredAttributes` value stored under it, and `ReadStoredAttributes`; gates work on the stored timestamp. |
 | `server/main.go` | Plugin entry point (minimal). |
 | `server/manifest.go` | Auto-generated from plugin.json — do not edit manually. |
@@ -92,20 +92,22 @@ The webapp exists only to render the custom `Attributes` setting in the System C
 | `Makefile` | Build orchestration (~420 lines). All build/test/deploy commands. |
 | `build/setup.mk` | Extracts PLUGIN_ID, PLUGIN_VERSION, HAS_SERVER, HAS_WEBAPP from plugin.json. |
 | `build/pluginctl/` | Tool for local Mattermost deployment. |
-| `data/attributes.json` | Example attributes document with sample user records. |
+| `data/attributes.json` | Example attributes document: `fields.user` plus sample user records. |
 
 ## Field Definitions
 
-Defined in the `fieldDefinitions` array in `server/sync/field_sync.go`:
+Come from `fields.user` in the uploaded document. `data/attributes.json` is the example set (same four attributes a test environment typically wants):
 
 1. **Job Title** — `job_title`, Text type, Public access
 2. **Programs** — `programs`, Multiselect type, SharedOnly access, options: Apples/Oranges/Lemons/Grapes
 3. **Clearance** — `clearance`, Rank type, SharedOnly access, options: CUI(1)/Confidential(2)/Secret(3)/Top Secret(4)
 4. **Start Date** — `start_date`, Date type, SourceOnly access
 
-All fields are `protected: true` (only this plugin can modify structure and write values) and `visibility: always` (shown in UI). Between them the four cover all three access modes, so a test environment gets one of each. Editing the array to suit a particular test is expected — README documents how.
+`protected` is always `true` and is not a document field. `visibility`, `access_mode`, `permission_field`, `permission_values`, and `permission_options` are optional and default to `always`, public, and `sysadmin`. Accepted values: visibility `always` / `hidden` / `when_set`; access mode `public` / `source_only` / `shared_only`; permission levels `none` / `sysadmin` / `member` / `admin`. `shared_only` with `permission_values: member` is rejected by the server; that field is skipped and logged, and the rest of the document still syncs.
 
-Field types cannot be changed after creation (a Mattermost limitation), so changing one means deleting the field, which deletes its values, and recreating it.
+The uploaded document is the full list of fields this plugin owns: a plugin-owned field it omits is deleted with its values. Fields owned by an admin or another plugin are left alone. It is not the full list of values — a user the document does not mention keeps existing values; values disappear only when their field does. With no document stored, activation skips field sync, so a restart cannot delete attributes.
+
+Field types cannot be changed after creation (a Mattermost limitation). To change one, upload a document that omits the field (deletes it and its values on the next field sync), then upload again with the new type.
 
 ### Access Modes
 
@@ -115,7 +117,7 @@ Field types cannot be changed after creation (a Mattermost limitation), so chang
 
 ## Data Flow
 
-1. `OnActivate()` calls `initializeAPI()` to build the HTTP router, then `SyncFields()`, which creates/updates field schema and returns a `FieldIDCache`
+1. `OnActivate()` calls `initializeAPI()` to build the HTTP router, then reads the stored document and runs field sync from `fields.user` (skipped when nothing is stored), which returns a `FieldIDCache`
 2. `OnActivate()` starts a `cluster.Job`
 3. On each job tick, `runSync()` calls `GetUserAttributes()` on the plugin's `KVStoreProvider`, then `SyncUsers()`
 4. `SyncUsers()` iterates users, looks up each by email, calls `buildPropertyValues()` to create `PropertyValue` objects, then bulk upserts via `Property.UpsertPropertyValues()`
@@ -124,9 +126,9 @@ Field types cannot be changed after creation (a Mattermost limitation), so chang
 **Invariants worth knowing before changing sync code:**
 
 - `email` is the join key between external data and Mattermost users. It is consumed by `SyncUsers()` and explicitly skipped by `buildPropertyValue()`, so it is never written as an attribute. Changing the identity strategy means touching both.
-- `FieldIDCache` is built once at activation and never refreshed. External names → Mattermost-generated field IDs; option names → option IDs. A cache miss on a field name is a skip-with-warning; a cache miss on an *option* name is an error for that value.
+- `FieldIDCache` is built once at activation and never refreshed. External names → Mattermost-generated field IDs; option names → option IDs; `FieldNameToType` holds the type declared in the document. A cache miss on a field name is a skip-with-warning; a cache miss on an *option* name is an error for that value.
 - Value JSON shape is type-dependent: text and date are marshaled strings; multiselect is an array of option **IDs**, not names; rank is a single option **ID** string, so a rank value looks like a text value on the wire and is only distinguishable by consulting the field definition.
-- `fieldDefinition.hasOptions()` is the single place that decides which field types carry options, and `fieldDefinitionsByName` (a package-level index of `fieldDefinitions`) is how value sync recovers a field's declared type from the external data's key. Adding an option-bearing field type means updating `hasOptions()` and the value-formatting switch in `buildPropertyValue()` together, or values will be written as raw names instead of option IDs.
+- `FieldNameToType` on `FieldIDCache` is how value sync recovers a field's declared type from the document's key. Adding an option-bearing field type means updating the value-formatting switch in `buildPropertyValue()` together with how field sync records the type, or values will be written as raw names instead of option IDs.
 - Failure handling is per-user and per-field: unknown fields, unsupported value types, format errors, missing users, and upsert failures all log and continue. `SyncUsers()` returns `nil` unless something structural goes wrong — a "successful" sync can have written nothing.
 - Timing comes from `nextWaitInterval()`, which schedules relative to `metadata.LastFinished` (0 on first run, so activation syncs immediately) and falls back to 60 minutes if the configured interval is < 1.
 - `cluster.Job` persists `LastFinished` in the plugin KV store under `cron_AttributeSync`, so it survives deactivation and redeployment. Two consequences: re-enabling the plugin syncs immediately only if the interval has already elapsed since the last run, and a sleeping job does not observe an interval change until it next wakes (`OnConfigurationChange` stores the config and nothing more). Nothing deletes that key on disable or on a forced upload — `DeleteAllKeysForPlugin` is only reachable from the plugin API itself.
@@ -135,7 +137,7 @@ Field types cannot be changed after creation (a Mattermost limitation), so chang
 - **`KVStoreProvider` distinguishes "no data" from "no change", and only the second is an empty slice.** No data — nothing has ever been uploaded, or the last document was deleted — is an error, so it lands in the log via `runSync`'s `Failed to fetch changed users`. The reasoning is that sync has been pointed at a specific place, so finding nothing there is a misconfiguration rather than a steady state — a fresh install therefore logs an error every tick until it is given data.
 - One KV key, `AttributesStoreKey` (`attributes`), holds a `StoredAttributes` — the uploaded bytes and the timestamp that makes the provider notice them, written and deleted as one value. This is the reason no handler has to reconcile a document against a separate timestamp, and why the provider fetches the whole document on every tick even when it turns out to be unchanged. `ReadStoredAttributes` is the only reader: it decodes the raw value itself rather than letting `KV.Get` unmarshal in place, which would surface an unreachable store and a corrupt value as the same error. An unset key is neither — `KV.Get` returns no error and leaves the target untouched, so "nothing uploaded" is the `len(Data) == 0` case.
 - `pluginapi`'s `KV.Set` stores raw bytes only when handed a `[]byte` and JSON-encodes anything else, so the document is base64 inside the envelope — roughly a third larger in the database than on disk. `json.RawMessage` would avoid that, at the cost of `json.Marshal` compacting the JSON and so breaking the byte-for-byte download.
-- **`ParseAttributesDocument` is the single place that decides what a valid document is**, shared by the upload handler and the sync path, so the two cannot drift into accepting different things. It only decodes `version` and `users` today; `encoding/json` ignores keys a struct does not name, and the stored bytes are the uploaded bytes verbatim, so a document already carrying `fields` or `channels` round-trips unchanged and survives until a later version of the parser reads them.
+- **`ParseAttributesDocument` is the single place that decides what a valid document is**, shared by the upload handler and the sync path, so the two cannot drift into accepting different things. It decodes `version`, `fields.user`, and `users`; `encoding/json` ignores keys a struct does not name, and the stored bytes are the uploaded bytes verbatim, so a document already carrying `channels` round-trips unchanged.
 
 ## HTTP API
 
@@ -167,7 +169,7 @@ Things to preserve when changing these:
 ## Adding to the Plugin
 
 ### A new attribute
-Add an entry to `fieldDefinitions` in `server/sync/field_sync.go` and restart the plugin. Select, multiselect, and rank types also need `Options` populated; on a rank field every option needs a `Rank`, which `buildOptionsArr()` enforces.
+Add an object to `fields.user` in the uploaded document and restart the plugin so field sync runs. Select, multiselect, and rank types also need `options` populated; on a rank field every option needs a `rank`, which `buildOptionsArr()` enforces.
 
 ### Server-side rules to work within
 Enforced by the property service, not by this plugin, so they cannot be worked around from here:
