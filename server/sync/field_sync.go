@@ -425,7 +425,7 @@ func SyncFields(client *pluginapi.Client, groupID, pluginID string, defs []Field
 			"failed_count", len(failedFields),
 			"failed_fields", failedFields)
 	}
-	summary.FieldsSkipped = len(failedFields)
+	summary.FieldsSkipped += len(failedFields)
 
 	DeleteOmittedFields(client, groupID, pluginID, defs, summary)
 

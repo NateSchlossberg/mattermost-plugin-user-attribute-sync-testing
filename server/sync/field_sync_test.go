@@ -365,6 +365,30 @@ func TestSyncFields(t *testing.T) {
 		assert.Equal(t, 1, summary.FieldsSkipped)
 	})
 
+	t.Run("skipped count accumulates across calls sharing a summary", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		api.On("GetPropertyFieldByName", groupID, "", mock.Anything).Return(nil, errors.New("not found"))
+		api.On("CreatePropertyField", mock.Anything).Return(nil, errors.New("API error"))
+		mockEmptyFieldSearch(api, groupID)
+
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		failing := defs[:1]
+		summary := &Summary{}
+
+		_, err := SyncFields(client, groupID, pluginID, failing, summary)
+		require.NoError(t, err)
+		_, err = SyncFields(client, groupID, pluginID, failing, summary)
+		require.NoError(t, err)
+
+		assert.Equal(t, 2, summary.FieldsSkipped)
+	})
+
 	t.Run("empty list creates no fields", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
