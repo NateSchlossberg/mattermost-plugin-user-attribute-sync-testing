@@ -30,12 +30,11 @@ func newTestPlugin(t *testing.T) (*Plugin, *plugintest.API) {
 	mockLogs(api)
 
 	client := pluginapi.NewClient(api, &plugintest.Driver{})
-	kvStoreProvider := sync.NewKVStoreProvider(client)
 
 	p := &Plugin{
 		MattermostPlugin: plugin.MattermostPlugin{API: api},
 		client:           client,
-		attributeSource:  kvStoreProvider,
+		groupID:          "group-id",
 	}
 	p.initializeAPI()
 
@@ -45,7 +44,7 @@ func newTestPlugin(t *testing.T) (*Plugin, *plugintest.API) {
 // mockLogs registers permissive expectations for the log methods so tests that
 // exercise error paths don't have to match every log line exactly.
 func mockLogs(api *plugintest.API) {
-	const maxLogFields = 8
+	const maxLogFields = 16
 	for _, method := range []string{"LogDebug", "LogInfo", "LogWarn", "LogError"} {
 		for n := 0; n <= maxLogFields; n++ {
 			args := make([]interface{}, n+1)

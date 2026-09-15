@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -29,11 +28,6 @@ func TestOnActivate(t *testing.T) {
 				Driver: &plugintest.Driver{},
 			},
 		}
-		t.Cleanup(func() {
-			if p.backgroundJob != nil {
-				require.NoError(t, p.backgroundJob.Close())
-			}
-		})
 
 		return p, api
 	}
@@ -43,70 +37,63 @@ func TestOnActivate(t *testing.T) {
 			Return(&model.PropertyGroup{ID: "group-id"}, nil).Once()
 	}
 
-	// LastFinished is the current time so the scheduled job waits instead of
-	// calling runSync immediately. Close can win the race against the first
-	// lock, so the KV mocks are Maybe.
-	mockJobScheduler := func(api *plugintest.API) {
-		meta, err := json.Marshal(struct{ LastFinished time.Time }{LastFinished: time.Now()})
-		require.NoError(t, err)
-		api.On("KVGet", "cron_AttributeSync").Return(meta, nil).Maybe()
-		api.On("KVSetWithOptions", mock.Anything, mock.Anything, mock.Anything).Return(true, nil).Maybe()
-	}
-
 	forbidFieldSync := func(t *testing.T, api *plugintest.API) {
 		t.Helper()
 		fail := func(mock.Arguments) { t.Fatal("SyncFields must not run") }
 		api.On("LogInfo", "Syncing field definitions", mock.Anything, mock.Anything).Run(fail).Maybe()
 		api.On("GetPropertyFieldByName", mock.Anything, mock.Anything, mock.Anything).Run(fail).Maybe()
+		api.On("SearchPropertyFields", mock.Anything, mock.Anything).Run(fail).Maybe()
 	}
 
-	requireEmptyCache := func(t *testing.T, p *Plugin) {
-		t.Helper()
-		require.NotNil(t, p.fieldIDCache)
-		assert.Empty(t, p.fieldIDCache.FieldNameToID)
-		assert.Empty(t, p.fieldIDCache.OptionNameToID)
-		assert.Empty(t, p.fieldIDCache.FieldNameToType)
-	}
-
-	t.Run("KV read error fails activation", func(t *testing.T) {
+	t.Run("KV read error logs and still activates", func(t *testing.T) {
 		p, api := newPlugin(t)
 		mockPropertyGroup(api)
 		api.On("KVGet", sync.AttributesStoreKey).
 			Return(nil, model.NewAppError("KVGet", "kv.get.app_error", nil, "connection refused", http.StatusInternalServerError)).Once()
-		mockLogs(api)
-
-		err := p.OnActivate()
-
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to read stored attributes")
-		assert.Nil(t, p.fieldIDCache)
-		assert.Nil(t, p.backgroundJob)
-	})
-
-	t.Run("no stored document skips field sync", func(t *testing.T) {
-		p, api := newPlugin(t)
-		mockPropertyGroup(api)
-		api.On("KVGet", sync.AttributesStoreKey).Return(nil, nil)
-		api.On("LogInfo", "No attributes document stored, skipping field sync").Once()
+		api.On("LogError", "Failed to apply stored attributes document", "error", mock.AnythingOfType("string")).Once()
 		forbidFieldSync(t, api)
-		mockJobScheduler(api)
 		mockLogs(api)
 
 		require.NoError(t, p.OnActivate())
-		requireEmptyCache(t, p)
 	})
 
-	t.Run("unparseable document skips field sync and still activates", func(t *testing.T) {
+	t.Run("no stored document activates and touches no property field", func(t *testing.T) {
+		p, api := newPlugin(t)
+		mockPropertyGroup(api)
+		api.On("KVGet", sync.AttributesStoreKey).Return(nil, nil)
+		api.On("LogInfo", "No attributes document stored, skipping sync").Once()
+		forbidFieldSync(t, api)
+		mockLogs(api)
+
+		require.NoError(t, p.OnActivate())
+	})
+
+	t.Run("unparseable document logs and still activates", func(t *testing.T) {
 		p, api := newPlugin(t)
 		mockPropertyGroup(api)
 		api.On("KVGet", sync.AttributesStoreKey).
 			Return(storedValue(t, time.Now(), []byte("not json")), nil)
-		api.On("LogError", "Failed to parse stored attributes document, skipping field sync", "error", mock.AnythingOfType("string")).Once()
+		api.On("LogError", "Failed to apply stored attributes document", "error", mock.AnythingOfType("string")).Once()
 		forbidFieldSync(t, api)
-		mockJobScheduler(api)
 		mockLogs(api)
 
 		require.NoError(t, p.OnActivate())
-		requireEmptyCache(t, p)
+	})
+
+	t.Run("stored document is applied", func(t *testing.T) {
+		p, api := newPlugin(t)
+		mockPropertyGroup(api)
+		api.On("KVGet", sync.AttributesStoreKey).
+			Return(storedValue(t, time.Now(), []byte(`{"version": 2, "fields": {"user": [{"name": "job_title", "display_name": "Job Title", "type": "text"}]}, "users": [{"email":"user1@example.com", "job_title": "Engineer"}]}`)), nil).Once()
+		api.On("GetPropertyFieldByName", "group-id", "", "job_title").Return(nil, assert.AnError).Once()
+		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
+			return f.Name == "job_title"
+		})).Return(&model.PropertyField{ID: "field-1", Name: "job_title", Type: model.PropertyFieldTypeText}, nil)
+		api.On("SearchPropertyFields", "group-id", mock.Anything).Return([]*model.PropertyField{}, nil)
+		api.On("GetUserByEmail", "user1@example.com").Return(&model.User{Id: "user1", Email: "user1@example.com"}, nil)
+		api.On("UpsertPropertyValues", mock.Anything).Return([]*model.PropertyValue{}, nil)
+		mockLogs(api)
+
+		require.NoError(t, p.OnActivate())
 	})
 }

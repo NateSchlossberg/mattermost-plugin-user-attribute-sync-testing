@@ -2,6 +2,7 @@ package sync
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -9,8 +10,12 @@ import (
 )
 
 // AttributesStoreKey holds what the HTTP handlers in server/http_hooks.go uploaded: the file, and
-// the timestamp that tells this provider the file is new.
+// the timestamp the status endpoint reports.
 const AttributesStoreKey = "attributes"
+
+// ErrNoStoredDocument is returned when nothing has been uploaded, or the last document was deleted.
+// Callers match it with errors.Is; it is not an empty document.
+var ErrNoStoredDocument = errors.New("no attributes document stored")
 
 // StoredAttributes is the value under AttributesStoreKey.
 //
@@ -39,59 +44,4 @@ func ReadStoredAttributes(client *pluginapi.Client) (StoredAttributes, error) {
 	}
 
 	return stored, nil
-}
-
-// KVStoreProvider reads user attribute data an admin uploaded through the System Console, which
-// the plugin stores in Mattermost's KV store. The KV store lives in Mattermost's Postgres
-// database, which is a more stable storage location than file systems in a cloud environment.
-//
-// Incremental synchronization relies on a stored timestamp: GetUserAttributes returns an empty
-// slice until the stored timestamp moves past the last one it processed.
-type KVStoreProvider struct {
-	client *pluginapi.Client
-
-	// lastTimestampSynced is the latest file timestamp that was processed. It is in-memory only, so a
-	// plugin restart re-syncs the stored file once.
-	lastTimestampSynced time.Time
-}
-
-func NewKVStoreProvider(client *pluginapi.Client) *KVStoreProvider {
-	return &KVStoreProvider{
-		client: client,
-	}
-}
-
-// GetUserAttributes reads the user attribute data an admin uploaded, from the KV store.
-// On the first call, it returns everything stored.
-// On subsequent calls, it checks whether a newer file has been uploaded since the last read:
-//   - If newer: reads and returns the updated user data
-//   - If unchanged: returns an empty array to signal no new data
-func (f *KVStoreProvider) GetUserAttributes() ([]map[string]interface{}, error) {
-	// One read gets the file and the timestamp together, so the file is fetched even when it turns
-	// out to be unchanged. Keeping it all in one key keeps key management simple; to support very
-	// large files read frequently, this can be broken out into separate keys if necessary.
-	stored, err := ReadStoredAttributes(f.client)
-	if err != nil {
-		return nil, err
-	}
-
-	// No file has ever been uploaded, or the last one was deleted
-	if len(stored.Data) == 0 {
-		return nil, fmt.Errorf("no attributes document in the KV store: %s is unset — upload one from the System Console", AttributesStoreKey)
-	}
-
-	// Nothing new since the last read, so there is no work to do
-	// Note we are checking if the stored file is before OR equal to the last sync, hence the !After call.
-	if stored.LastUpdated.IsZero() || !stored.LastUpdated.After(f.lastTimestampSynced) {
-		return []map[string]interface{}{}, nil
-	}
-
-	// Update the sync after a successful read but before validation so we dont keep reading an invalid file
-	f.lastTimestampSynced = stored.LastUpdated
-
-	doc, err := ParseAttributesDocument(stored.Data)
-	if err != nil {
-		return nil, err
-	}
-	return doc.Users, nil
 }

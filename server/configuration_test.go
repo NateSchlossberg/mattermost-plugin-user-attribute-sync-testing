@@ -34,5 +34,4 @@ func TestOnConfigurationChange(t *testing.T) {
 
 	cfg := p.getConfiguration()
 	assert.Equal(t, 30, cfg.SyncIntervalMinutes)
-	assert.Nil(t, p.attributeSource, "the attribute source is OnActivate's to build, not this hook's")
 }

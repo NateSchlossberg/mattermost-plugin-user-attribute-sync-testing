@@ -7,7 +7,6 @@ import (
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 	"github.com/mattermost/mattermost/server/public/pluginapi"
-	"github.com/mattermost/mattermost/server/public/pluginapi/cluster"
 	"github.com/pkg/errors"
 
 	attrsync "github.com/mattermost/mattermost-plugin-user-attribute-sync-testing/server/sync"
@@ -23,25 +22,17 @@ type Plugin struct {
 	// router is the HTTP router that serves API endpoints.
 	router *mux.Router
 
-	// backgroundJob runs attribute sync on the configured time interval.
-	backgroundJob *cluster.Job
-
-	// attributeSource reads user attribute data uploaded through the System Console. It is
-	// assigned once in OnActivate, before the sync job is scheduled, and never reassigned —
-	// only the sync job reads it, so it needs no lock.
-	attributeSource *attrsync.KVStoreProvider
-
 	// groupID is the ID of the Mattermost property group this plugin reads and writes.
 	// We use the "access_control" group because user attribute fields defined here can be
 	// referenced from attribute-based access control (ABAC) policy rules — e.g. a channel
 	// policy that only admits users whose "Programs" includes "Apples".
 	groupID string
 
-	// fieldIDCache stores mappings from external field/option names to Mattermost-generated IDs
-	fieldIDCache *attrsync.FieldIDCache
-
 	// configurationLock synchronizes access to the configuration.
 	configurationLock sync.RWMutex
+
+	// syncLock serializes runSync so two triggers cannot interleave their writes.
+	syncLock sync.Mutex
 
 	// configuration is the active plugin configuration. Consult getConfiguration and
 	// setConfiguration for usage.
@@ -68,56 +59,27 @@ func (p *Plugin) OnActivate() error {
 	}
 	p.groupID = group.ID
 
-	stored, err := attrsync.ReadStoredAttributes(p.client)
-	if err != nil {
-		return errors.Wrap(err, "failed to read stored attributes")
+	summary, err := p.runSync()
+	switch {
+	case errors.Is(err, attrsync.ErrNoStoredDocument):
+		p.client.Log.Info("No attributes document stored, skipping sync")
+	case err != nil:
+		// Activate anyway: failing here would take the HTTP routes down, and the
+		// admin would have no way to upload a replacement.
+		p.client.Log.Error("Failed to apply stored attributes document", "error", err.Error())
+	default:
+		p.client.Log.Info("Applied stored attributes document",
+			"fields_created", summary.FieldsCreated,
+			"fields_updated", summary.FieldsUpdated,
+			"fields_deleted", summary.FieldsDeleted,
+			"fields_skipped", summary.FieldsSkipped,
+			"users_synced", summary.UsersSynced,
+			"users_skipped", summary.UsersSkipped,
+			"channels_synced", summary.ChannelsSynced,
+			"channels_skipped", summary.ChannelsSkipped,
+		)
 	}
 
-	p.fieldIDCache = attrsync.NewFieldIDCache()
-	if len(stored.Data) == 0 {
-		p.client.Log.Info("No attributes document stored, skipping field sync")
-	} else {
-		doc, parseErr := attrsync.ParseAttributesDocument(stored.Data)
-		if parseErr != nil {
-			p.client.Log.Error("Failed to parse stored attributes document, skipping field sync", "error", parseErr.Error())
-		} else {
-			p.fieldIDCache, err = attrsync.SyncFields(p.client, p.groupID, manifest.Id, doc.Fields.User, &attrsync.Summary{})
-			if err != nil {
-				return errors.Wrap(err, "failed to sync field definitions")
-			}
-			p.client.Log.Info("Field sync completed successfully")
-		}
-	}
-
-	p.attributeSource = attrsync.NewKVStoreProvider(p.client)
-
-	// Set up the attribute sync cluster job
-	// This job runs periodically to synchronize user attribute values from external
-	// sources into Mattermost user attribute fields. Using cluster.Schedule ensures
-	// only one server instance runs the job in multi-server deployments.
-	job, err := cluster.Schedule(
-		p.API,
-		"AttributeSync",
-		p.nextWaitInterval,
-		p.runSync,
-	)
-	if err != nil {
-		return errors.Wrap(err, "failed to schedule attribute sync job")
-	}
-
-	p.backgroundJob = job
-
-	return nil
-}
-
-// OnDeactivate is invoked when the plugin is deactivated.
-// The HTTP router needs no cleanup here; the server stops routing to a deactivated plugin.
-func (p *Plugin) OnDeactivate() error {
-	if p.backgroundJob != nil {
-		if err := p.backgroundJob.Close(); err != nil {
-			p.API.LogError("Failed to close attribute sync job", "err", err)
-		}
-	}
 	return nil
 }
 
