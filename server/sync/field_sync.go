@@ -281,6 +281,20 @@ func createField(
 	return createdField, nil
 }
 
+// fieldSourcePluginID returns the field's source_plugin_id, or empty if the
+// attribute is missing or not a string (an admin-created field has none).
+func fieldSourcePluginID(field *model.PropertyField) string {
+	raw, ok := field.Attrs[model.PropertyAttrsSourcePluginID]
+	if !ok {
+		return ""
+	}
+	id, ok := raw.(string)
+	if !ok {
+		return ""
+	}
+	return id
+}
+
 // isFieldOwnedByPlugin checks if an existing field is owned and managed by this plugin
 // by verifying the source_plugin_id attribute matches our plugin ID.
 func isFieldOwnedByPlugin(
@@ -289,27 +303,22 @@ func isFieldOwnedByPlugin(
 	pluginID string,
 	def FieldDefinition,
 ) bool {
-	sourcePluginID, hasSource := existingField.Attrs[model.PropertyAttrsSourcePluginID]
-	if !hasSource {
-		// No source plugin ID - field was created by admin or other means
+	sourceID := fieldSourcePluginID(existingField)
+	if sourceID == pluginID {
+		return true
+	}
+	if sourceID == "" {
 		client.Log.Error("Field already exists but has no source_plugin_id (likely created by admin)",
 			"field_name", def.Name,
 			"field_id", existingField.ID)
 		return false
 	}
 
-	sourceID, ok := sourcePluginID.(string)
-	if !ok || sourceID != pluginID {
-		// Field is owned by a different plugin
-		client.Log.Error("Field already exists but is owned by another plugin",
-			"field_name", def.Name,
-			"field_id", existingField.ID,
-			"owner_plugin_id", sourceID)
-		return false
-	}
-
-	// Source plugin ID matches ours
-	return true
+	client.Log.Error("Field already exists but is owned by another plugin",
+		"field_name", def.Name,
+		"field_id", existingField.ID,
+		"owner_plugin_id", sourceID)
+	return false
 }
 
 // syncSingleField ensures a single user attribute field exists and matches the definition.
@@ -457,6 +466,8 @@ func SyncFields(client *pluginapi.Client, groupID, pluginID string, defs []Field
 		// Return partial cache even on failures
 	}
 
+	deleteOmittedFields(client, groupID, pluginID, defs)
+
 	client.Log.Info("Field sync completed",
 		"total", len(defs),
 		"failed", len(failedFields),
@@ -464,4 +475,72 @@ func SyncFields(client *pluginapi.Client, groupID, pluginID string, defs []Field
 		"options_cached", len(cache.OptionNameToID))
 
 	return cache, nil
+}
+
+const fieldSearchPerPage = 100
+
+// deleteOmittedFields removes fields this plugin owns that defs no longer name,
+// deleting each field's values first so the server can still authorize the
+// value delete against a live field. A search error stops the pass; a
+// per-field delete error is logged and the rest continue.
+func deleteOmittedFields(client *pluginapi.Client, groupID, pluginID string, defs []FieldDefinition) {
+	named := make(map[string]struct{}, len(defs))
+	for _, def := range defs {
+		named[def.Name] = struct{}{}
+	}
+
+	var cursor model.PropertyFieldSearchCursor
+	for {
+		opts := model.PropertyFieldSearchOpts{
+			PerPage: fieldSearchPerPage,
+			Cursor:  cursor,
+		}
+		fields, err := client.Property.SearchPropertyFields(groupID, opts)
+		if err != nil {
+			client.Log.Error("Failed to search property fields for deletion", "error", err.Error())
+			return
+		}
+
+		for _, field := range fields {
+			if _, keep := named[field.Name]; keep {
+				continue
+			}
+
+			owner := fieldSourcePluginID(field)
+			if owner != pluginID {
+				client.Log.Debug("Skipping field not owned by this plugin",
+					"field_name", field.Name,
+					"field_id", field.ID,
+					"owner_plugin_id", owner)
+				continue
+			}
+
+			if err := client.Property.DeletePropertyValuesForField(groupID, field.ID); err != nil {
+				client.Log.Error("Failed to delete values for omitted field",
+					"field_name", field.Name,
+					"field_id", field.ID,
+					"error", err.Error())
+				continue
+			}
+			if err := client.Property.DeletePropertyField(groupID, field.ID); err != nil {
+				client.Log.Error("Failed to delete omitted field",
+					"field_name", field.Name,
+					"field_id", field.ID,
+					"error", err.Error())
+				continue
+			}
+			client.Log.Info("Deleted omitted field",
+				"field_name", field.Name,
+				"field_id", field.ID)
+		}
+
+		if len(fields) < fieldSearchPerPage {
+			return
+		}
+		last := fields[len(fields)-1]
+		cursor = model.PropertyFieldSearchCursor{
+			PropertyFieldID: last.ID,
+			CreateAt:        last.CreateAt,
+		}
+	}
 }
