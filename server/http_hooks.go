@@ -32,7 +32,7 @@ func (p *Plugin) ServeHTTP(c *plugin.Context, w http.ResponseWriter, r *http.Req
 // served, so OnActivate calls it first.
 //
 // These endpoints let an admin upload the attributes document directly through the System
-// Console into the plugin KV store, which KVStoreProvider reads.
+// Console into the plugin KV store, which ReadStoredAttributes reads.
 //
 // Every route is behind requireSysadmin, applied once here as middleware rather than repeated in
 // each handler, so a route added later cannot accidentally be left unauthenticated. Note this

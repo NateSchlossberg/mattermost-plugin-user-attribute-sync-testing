@@ -144,8 +144,8 @@ export default function UploadUserAttributes({id, disabled = false}: Props) {
 
             // The same shape check the server does: a JSON object carrying the supported version.
             // Record, field and channel contents are not validated here — the server does not
-            // either, and unrecognized fields or unmatched emails surface as warnings in the
-            // plugin logs during the next sync.
+            // either: it logs unrecognized fields and unmatched emails while applying the
+            // upload and reports them as the skip counts in the summary this panel shows.
             const parsed: unknown = JSON.parse(text);
             if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
                 throw new Error('File must be a JSON object');
