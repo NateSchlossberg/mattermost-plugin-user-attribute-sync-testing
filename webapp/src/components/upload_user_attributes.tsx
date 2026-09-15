@@ -37,9 +37,24 @@ type FileStatus = {
     lastUpdated: string | null;
 }
 
+type SyncSummary = {
+    fieldsCreated: number;
+    fieldsUpdated: number;
+    fieldsDeleted: number;
+    fieldsSkipped: number;
+    usersSynced: number;
+    usersSkipped: number;
+    channelsSynced: number;
+    channelsSkipped: number;
+}
+
 // Mirrors maxFileSizeBytes in server/http_hooks.go. Checking here means an oversized file is
 // rejected before it is uploaded; the server enforces the same limit regardless.
 const MAX_FILE_BYES = 10 * 1024 * 1024;
+
+function coerceCount(value: unknown): number {
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
 
 // Narrows an untrusted response body to FileStatus, so a malformed or truncated answer degrades to
 // "no file" instead of putting undefined into state and rendering it.
@@ -48,6 +63,20 @@ function parseFileStatus(body: unknown): FileStatus {
     return {
         exists: Boolean(record.exists),
         lastUpdated: typeof record.lastUpdated === 'string' ? record.lastUpdated : null,
+    };
+}
+
+function parseSyncSummary(body: unknown): SyncSummary {
+    const record = (body ?? {}) as Record<string, unknown>;
+    return {
+        fieldsCreated: coerceCount(record.fieldsCreated),
+        fieldsUpdated: coerceCount(record.fieldsUpdated),
+        fieldsDeleted: coerceCount(record.fieldsDeleted),
+        fieldsSkipped: coerceCount(record.fieldsSkipped),
+        usersSynced: coerceCount(record.usersSynced),
+        usersSkipped: coerceCount(record.usersSkipped),
+        channelsSynced: coerceCount(record.channelsSynced),
+        channelsSkipped: coerceCount(record.channelsSkipped),
     };
 }
 
@@ -87,6 +116,7 @@ export default function UploadUserAttributes({id, disabled = false}: Props) {
     const [status, setStatus] = useState<'init' | 'idle' | 'downloading' | 'uploading' | 'deleting'>('init');
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
+    const [syncSummary, setSyncSummary] = useState<SyncSummary | null>(null);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
     // The file input is hidden, so it is triggered and cleared through this ref.
@@ -149,6 +179,7 @@ export default function UploadUserAttributes({id, disabled = false}: Props) {
         setStatus('uploading');
         setError(null);
         setSuccess(null);
+        setSyncSummary(null);
 
         try {
             const response = await fetch(
@@ -161,12 +192,13 @@ export default function UploadUserAttributes({id, disabled = false}: Props) {
                 throw new Error(body.error ?? `Upload failed (${response.status})`);
             }
 
-            setServerFileStatus(parseFileStatus(body));
+            setSyncSummary(parseSyncSummary(body));
             setPendingFile(null);
             if (inputRef.current) {
                 inputRef.current.value = '';
             }
             setSuccess('File uploaded');
+            await checkServerFileStatus();
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Upload failed');
         } finally {
@@ -203,13 +235,14 @@ export default function UploadUserAttributes({id, disabled = false}: Props) {
         }
     }
 
-    // Removes the stored file. Only reachable through the confirmation modal, because there is no
-    // copy on the server to restore from and already-synced attribute values are left behind.
+    // Removes the stored document and every field this plugin owns. Only reachable through the
+    // confirmation modal; there is no copy on the server to restore from.
     async function handleDelete() {
         setShowDeleteConfirm(false);
         setStatus('deleting');
         setError(null);
         setSuccess(null);
+        setSyncSummary(null);
 
         try {
             const response = await fetch(
@@ -217,10 +250,12 @@ export default function UploadUserAttributes({id, disabled = false}: Props) {
                 Client4.getOptions({method: 'DELETE'}),
             );
 
+            const body = await response.json().catch(() => ({}));
             if (!response.ok) {
-                throw new Error(`Delete failed (${response.status})`);
+                throw new Error(body.error ?? `Delete failed (${response.status})`);
             }
 
+            setSyncSummary(parseSyncSummary(body));
             setServerFileStatus({exists: false, lastUpdated: null});
             setSuccess('File Deleted');
         } catch (err) {
@@ -231,8 +266,8 @@ export default function UploadUserAttributes({id, disabled = false}: Props) {
     }
 
     async function checkServerFileStatus() {
-        // this is only called on mount, with status state initialized to 'init' above.
-        // if that changes this should get its own status similar to the other calls.
+        // Called on mount and after a successful upload. On mount, status starts as 'init';
+        // after upload it is already 'uploading'. Both paths finish idle.
         try {
             const response = await fetch(Client4.getAbsoluteUrl(`/plugins/${manifest.id}/attributes/status`));
             const body = await response.json().catch(() => ({}));
@@ -309,11 +344,23 @@ export default function UploadUserAttributes({id, disabled = false}: Props) {
 
             {error && <div className='error-text'>{error}</div>}
             {success && <div className='success-text'>{success}</div>}
+            {syncSummary && (
+                <ul className='UserAttrSync__status'>
+                    <li>{`Fields created: ${syncSummary.fieldsCreated}`}</li>
+                    <li>{`Fields updated: ${syncSummary.fieldsUpdated}`}</li>
+                    <li>{`Fields deleted: ${syncSummary.fieldsDeleted}`}</li>
+                    <li>{`Fields skipped: ${syncSummary.fieldsSkipped}`}</li>
+                    <li>{`Users synced: ${syncSummary.usersSynced}`}</li>
+                    <li>{`Users skipped: ${syncSummary.usersSkipped}`}</li>
+                    <li>{`Channels synced: ${syncSummary.channelsSynced}`}</li>
+                    <li>{`Channels skipped: ${syncSummary.channelsSkipped}`}</li>
+                </ul>
+            )}
 
             <ConfirmModal
                 show={showDeleteConfirm}
                 title={'Delete stored attributes document?'}
-                message={'The uploaded document will be removed from the server and the plugin will have nothing to sync. Attribute values already written to user profiles will remain. This cannot be undone.'}
+                message={'The uploaded document will be removed from the server and every attribute this plugin created is deleted along with the values on user profiles. This cannot be undone.'}
                 confirmButtonText={'Delete'}
                 isConfirmDisabled={disabled}
                 onConfirm={handleDelete}
