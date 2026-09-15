@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -343,5 +344,92 @@ func TestFieldIDCache(t *testing.T) {
 			OptionNameToID: make(map[string]string),
 		}
 		assert.Equal(t, "", cache.GetOptionID("programs", "Unknown"))
+	})
+}
+
+func TestFieldDefinitionDefaults(t *testing.T) {
+	tests := []struct {
+		name                  string
+		json                  string
+		wantVisibility        string
+		wantAccessMode        string
+		wantPermissionField   model.PermissionLevel
+		wantPermissionValues  model.PermissionLevel
+		wantPermissionOptions model.PermissionLevel
+	}{
+		{
+			name:                  "omitted keys use current defaults",
+			json:                  `{"name":"job_title","display_name":"Job Title","type":"text"}`,
+			wantVisibility:        model.PropertyFieldVisibilityAlways,
+			wantAccessMode:        model.PropertyAccessModePublic,
+			wantPermissionField:   model.PermissionLevelSysadmin,
+			wantPermissionValues:  model.PermissionLevelSysadmin,
+			wantPermissionOptions: model.PermissionLevelSysadmin,
+		},
+		{
+			name:                  "public access_mode translates to empty string",
+			json:                  `{"name":"job_title","access_mode":"public"}`,
+			wantVisibility:        model.PropertyFieldVisibilityAlways,
+			wantAccessMode:        model.PropertyAccessModePublic,
+			wantPermissionField:   model.PermissionLevelSysadmin,
+			wantPermissionValues:  model.PermissionLevelSysadmin,
+			wantPermissionOptions: model.PermissionLevelSysadmin,
+		},
+		{
+			name:                  "empty access_mode is public",
+			json:                  `{"name":"job_title","access_mode":""}`,
+			wantVisibility:        model.PropertyFieldVisibilityAlways,
+			wantAccessMode:        model.PropertyAccessModePublic,
+			wantPermissionField:   model.PermissionLevelSysadmin,
+			wantPermissionValues:  model.PermissionLevelSysadmin,
+			wantPermissionOptions: model.PermissionLevelSysadmin,
+		},
+		{
+			name: "explicit values pass through",
+			json: `{
+				"name":"start_date",
+				"access_mode":"source_only",
+				"visibility":"hidden",
+				"permission_field":"admin",
+				"permission_values":"member",
+				"permission_options":"none"
+			}`,
+			wantVisibility:        model.PropertyFieldVisibilityHidden,
+			wantAccessMode:        model.PropertyAccessModeSourceOnly,
+			wantPermissionField:   model.PermissionLevelAdmin,
+			wantPermissionValues:  model.PermissionLevelMember,
+			wantPermissionOptions: model.PermissionLevelNone,
+		},
+		{
+			name:                  "unknown values pass through for the server to reject",
+			json:                  `{"name":"x","access_mode":"nope","visibility":"never","permission_field":"root","permission_values":"root","permission_options":"root"}`,
+			wantVisibility:        "never",
+			wantAccessMode:        "nope",
+			wantPermissionField:   model.PermissionLevel("root"),
+			wantPermissionValues:  model.PermissionLevel("root"),
+			wantPermissionOptions: model.PermissionLevel("root"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var def FieldDefinition
+			require.NoError(t, json.Unmarshal([]byte(tt.json), &def))
+			assert.Equal(t, tt.wantVisibility, def.visibility())
+			assert.Equal(t, tt.wantAccessMode, def.accessMode())
+			assert.Equal(t, tt.wantPermissionField, *def.permissionField())
+			assert.Equal(t, tt.wantPermissionValues, *def.permissionValues())
+			assert.Equal(t, tt.wantPermissionOptions, *def.permissionOptions())
+		})
+	}
+
+	t.Run("hardcoded definitions still resolve to today's access modes", func(t *testing.T) {
+		byName := fieldDefinitionsByName
+		assert.Equal(t, model.PropertyAccessModePublic, byName["job_title"].accessMode())
+		assert.Equal(t, model.PropertyAccessModeSharedOnly, byName["programs"].accessMode())
+		assert.Equal(t, model.PropertyAccessModeSharedOnly, byName["clearance"].accessMode())
+		assert.Equal(t, model.PropertyAccessModeSourceOnly, byName["start_date"].accessMode())
+		assert.Equal(t, model.PropertyFieldVisibilityAlways, byName["job_title"].visibility())
+		assert.Equal(t, model.PermissionLevelSysadmin, *byName["job_title"].permissionField())
 	})
 }

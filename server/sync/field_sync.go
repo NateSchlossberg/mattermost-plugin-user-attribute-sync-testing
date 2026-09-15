@@ -30,21 +30,21 @@ func (c *FieldIDCache) GetOptionID(fieldName, optionName string) string {
 	return c.OptionNameToID[fieldName+"|"+optionName]
 }
 
-// fieldDefinition defines a user attribute field schema.
-type fieldDefinition struct {
+// FieldDefinition is one field as stored in the uploaded document.
+type FieldDefinition struct {
 	// Name is the canonical field identifier. It must match ^[A-Za-z_][A-Za-z0-9_]*$
 	// because Mattermost references the name from ABAC policy expressions as
 	// user.attributes.<name> (a CEL identifier), so spaces and punctuation are
 	// rejected. We also use this name as the lookup key when matching attributes
 	// from the external data source — the JSON file's keys must match these names.
-	Name string
+	Name string `json:"name"`
 
 	// DisplayName is the human-readable label shown in user-facing UI. Free-form
 	// text; no character restrictions.
-	DisplayName string
+	DisplayName string `json:"display_name"`
 
-	Type    model.PropertyFieldType                     // Field type (text, date, multiselect, etc.)
-	Options []model.CustomProfileAttributesSelectOption // Options for select, multiselect, and rank fields
+	Type    model.PropertyFieldType                     `json:"type"`
+	Options []model.CustomProfileAttributesSelectOption `json:"options,omitempty"`
 	// AccessMode controls who can read this field's values. Three modes:
 	//   - Public (empty string): Everyone can read all field options and values
 	//   - SourceOnly: Only this plugin can read values; others see empty options and no values
@@ -53,7 +53,48 @@ type fieldDefinition struct {
 	//                  [Apples, Bananas] and Bob selected [Bananas, Oranges], Alice querying
 	//                  Bob's values would only see [Bananas]).
 	// 					Note: Ranks will see their own ranks and lower.
-	AccessMode string
+	// The document may write "public" for the empty-string mode; accessMode()
+	// translates that, because the server rejects the literal "public".
+	AccessMode string `json:"access_mode,omitempty"`
+
+	Visibility        string `json:"visibility,omitempty"`
+	PermissionField   string `json:"permission_field,omitempty"`
+	PermissionValues  string `json:"permission_values,omitempty"`
+	PermissionOptions string `json:"permission_options,omitempty"`
+}
+
+func (d FieldDefinition) visibility() string {
+	if d.Visibility == "" {
+		return model.PropertyFieldVisibilityAlways
+	}
+	return d.Visibility
+}
+
+func (d FieldDefinition) accessMode() string {
+	if d.AccessMode == "" || d.AccessMode == "public" {
+		return model.PropertyAccessModePublic
+	}
+	return d.AccessMode
+}
+
+func (d FieldDefinition) permissionField() *model.PermissionLevel {
+	return permissionLevelPtr(d.PermissionField)
+}
+
+func (d FieldDefinition) permissionValues() *model.PermissionLevel {
+	return permissionLevelPtr(d.PermissionValues)
+}
+
+func (d FieldDefinition) permissionOptions() *model.PermissionLevel {
+	return permissionLevelPtr(d.PermissionOptions)
+}
+
+func permissionLevelPtr(value string) *model.PermissionLevel {
+	level := model.PermissionLevelSysadmin
+	if value != "" {
+		level = model.PermissionLevel(value)
+	}
+	return &level
 }
 
 // fieldDefinitions contains all user attribute fields this plugin creates.
@@ -69,7 +110,7 @@ type fieldDefinition struct {
 //   - Only this plugin can modify the field structure (add/remove options, change types)
 //   - Only this plugin can write values (users and admins cannot manually edit)
 //   - Access modes control read permissions (who can see the data)
-var fieldDefinitions = []fieldDefinition{
+var fieldDefinitions = []FieldDefinition{
 	{
 		// Public: readable by everyone, while still being plugin-managed and not admin-editable.
 		Name:        "job_title",
@@ -122,8 +163,8 @@ var fieldDefinitions = []fieldDefinition{
 // populated after fieldDefinitions regardless of declaration order.
 var fieldDefinitionsByName = indexFieldDefinitions(fieldDefinitions)
 
-func indexFieldDefinitions(defs []fieldDefinition) map[string]fieldDefinition {
-	byName := make(map[string]fieldDefinition, len(defs))
+func indexFieldDefinitions(defs []FieldDefinition) map[string]FieldDefinition {
+	byName := make(map[string]FieldDefinition, len(defs))
 	for _, def := range defs {
 		byName[def.Name] = def
 	}
@@ -136,7 +177,7 @@ func updateField(
 	client *pluginapi.Client,
 	groupID string,
 	existingField *model.PropertyField,
-	def fieldDefinition,
+	def FieldDefinition,
 	cache *FieldIDCache,
 ) (*model.PropertyField, error) {
 	client.Log.Info("Field exists, updating to match definition",
@@ -144,15 +185,14 @@ func updateField(
 		"name", def.Name)
 
 	existingField.Type = def.Type
-	existingField.Attrs[model.PropertyFieldAttrVisibility] = model.PropertyFieldVisibilityAlways
+	existingField.Attrs[model.PropertyFieldAttrVisibility] = def.visibility()
 	existingField.Attrs[model.PropertyFieldAttrDisplayName] = def.DisplayName
 	existingField.Attrs[model.PropertyAttrsProtected] = true
-	existingField.Attrs[model.PropertyAttrsAccessMode] = def.AccessMode
-	// See createField for why all three permission levels are set to sysadmin.
-	sysadmin := model.PermissionLevelSysadmin
-	existingField.PermissionField = &sysadmin
-	existingField.PermissionValues = &sysadmin
-	existingField.PermissionOptions = &sysadmin
+	existingField.Attrs[model.PropertyAttrsAccessMode] = def.accessMode()
+	// See createField for why the permission-level default is sysadmin.
+	existingField.PermissionField = def.permissionField()
+	existingField.PermissionValues = def.permissionValues()
+	existingField.PermissionOptions = def.permissionOptions()
 
 	if def.Type.SupportsOptions() {
 		options, err := buildOptionsArr(def, cache)
@@ -171,7 +211,7 @@ func updateField(
 	return updatedField, nil
 }
 
-func buildOptionsArr(def fieldDefinition, cache *FieldIDCache) ([]interface{}, error) {
+func buildOptionsArr(def FieldDefinition, cache *FieldIDCache) ([]interface{}, error) {
 	options := make([]model.CustomProfileAttributesSelectOption, len(def.Options))
 	for i, option := range def.Options {
 		// Add in ID if it's already in the cache, otherwise Mattermost will generate a new one
@@ -207,39 +247,36 @@ func buildOptionsArr(def fieldDefinition, cache *FieldIDCache) ([]interface{}, e
 func createField(
 	client *pluginapi.Client,
 	groupID string,
-	def fieldDefinition,
+	def FieldDefinition,
 ) (*model.PropertyField, error) {
 	client.Log.Info("Field does not exist, creating", "name", def.Name)
 
 	// These three permission levels describe who, role-wise, can edit the
 	// field definition (PermissionField), write a user's value
 	// (PermissionValues), or change the multiselect options (PermissionOptions).
+	// Omitted keys default to sysadmin.
 	//
-	// For this plugin they're largely a formality: every field we create is
-	// protected, so only the plugin can write through the source_plugin_id
-	// mechanism, and source_only/shared_only access modes already restrict
-	// who can read the values — even admins can't see source_only fields.
-	// Mattermost also pins PermissionField and PermissionOptions to sysadmin
-	// itself for any field in the access_control group, so those two are
-	// truly no-ops here.
+	// Every field we create is protected, so only the plugin can write
+	// through the source_plugin_id mechanism, and source_only/shared_only
+	// access modes already restrict who can read the values — even admins
+	// can't see source_only fields. Mattermost also pins PermissionField
+	// and PermissionOptions to sysadmin itself for any field in the
+	// access_control group, so those two are truly no-ops here.
 	//
-	// Even so, our shared_only field forces us to set PermissionValues. The
-	// default for user fields lets members edit their own value, and
-	// Mattermost rejects that combined with shared_only — if anyone could
-	// pick any value, they could fake having something in common with
-	// anyone. Setting PermissionValues to sysadmin clears that check. We
-	// set the other two to sysadmin alongside it so all three read the same
-	// way.
-	sysadmin := model.PermissionLevelSysadmin
-
+	// Even so, shared_only forces PermissionValues off the user-field
+	// default (members edit their own value): Mattermost rejects that
+	// combined with shared_only — if anyone could pick any value, they
+	// could fake having something in common with anyone. Sysadmin clears
+	// that check. The other two default to sysadmin alongside it so all
+	// three read the same way.
 	field := &model.PropertyField{
 		// ID left empty - Mattermost will auto-generate
 		GroupID:           groupID,
 		Name:              def.Name,
 		Type:              def.Type,
-		PermissionField:   &sysadmin,
-		PermissionValues:  &sysadmin,
-		PermissionOptions: &sysadmin,
+		PermissionField:   def.permissionField(),
+		PermissionValues:  def.permissionValues(),
+		PermissionOptions: def.permissionOptions(),
 
 		// ObjectType declares what kind of object this field describes. This is a
 		// user attribute sync plugin, so every field describes users and we pin
@@ -267,7 +304,7 @@ func createField(
 			// This does NOT affect data access via API - use AccessMode for that.
 			// "Always" makes values visible in the UI. "Hidden" hides them from UI but
 			// data can still be retrieved via API (subject to AccessMode permissions).
-			model.PropertyFieldAttrVisibility: model.PropertyFieldVisibilityAlways,
+			model.PropertyFieldAttrVisibility: def.visibility(),
 
 			// Protected means only this plugin can:
 			//   - Modify field structure (add/remove options, change field type)
@@ -278,8 +315,8 @@ func createField(
 
 			// AccessMode controls read permissions (who can see values via API and UI).
 			// Works in conjunction with "protected" to provide complete access control.
-			// See fieldDefinition.AccessMode for details on the three modes.
-			model.PropertyAttrsAccessMode: def.AccessMode,
+			// See FieldDefinition.AccessMode for details on the three modes.
+			model.PropertyAttrsAccessMode: def.accessMode(),
 		},
 	}
 
@@ -308,7 +345,7 @@ func isFieldOwnedByPlugin(
 	client *pluginapi.Client,
 	existingField *model.PropertyField,
 	pluginID string,
-	def fieldDefinition,
+	def FieldDefinition,
 ) bool {
 	sourcePluginID, hasSource := existingField.Attrs[model.PropertyAttrsSourcePluginID]
 	if !hasSource {
@@ -339,7 +376,7 @@ func syncSingleField(
 	client *pluginapi.Client,
 	groupID string,
 	pluginID string,
-	def fieldDefinition,
+	def FieldDefinition,
 	cache *FieldIDCache,
 ) (string, error) {
 	// Try to get existing field
@@ -404,7 +441,7 @@ func syncSingleField(
 func extractOptionIDs(
 	client *pluginapi.Client,
 	field *model.PropertyField,
-	def fieldDefinition,
+	def FieldDefinition,
 	cache *FieldIDCache,
 ) error {
 	// Extract option IDs from the field attributes
