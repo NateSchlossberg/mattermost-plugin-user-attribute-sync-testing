@@ -77,6 +77,10 @@ export default class PluginSettingsPage {
         return this.page.locator('.success-text');
     }
 
+    syncSummary() {
+        return this.page.locator('.UserAttrSync').getByRole('list');
+    }
+
     // --- actions -----------------------------------------------------------
 
     async save() {

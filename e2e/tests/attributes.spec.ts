@@ -42,6 +42,10 @@ test.describe('attributes upload and download', () => {
         await settings.expectFileOnServer();
         await expect(settings.errorText()).toHaveCount(0);
         await expect(settings.successText()).toBeVisible();
+        await expect(settings.syncSummary()).toContainText('Fields created: 4');
+        await expect(settings.syncSummary()).toContainText('Fields updated: 0');
+        await expect(settings.syncSummary()).toContainText('Fields deleted: 0');
+        await expect(settings.syncSummary()).toContainText('Fields skipped: 0');
     });
 
     // Each of these is rejected client-side, before anything is sent, so the assertions below
@@ -90,7 +94,7 @@ test.describe('attributes upload and download', () => {
         expect(contents).toEqual(original);
     });
 
-    test('deletes the stored file', async ({page}) => {
+    test('deletes the stored file and the plugin-owned fields', async ({page}) => {
         const admin = await adminAPIContext();
         await apiUploadStoredAttributes(admin, validAttributesFile);
         await admin.dispose();
@@ -103,7 +107,9 @@ test.describe('attributes upload and download', () => {
 
         await settings.expectNoFileOnServer();
         await expect(settings.downloadButton()).toBeDisabled();
+        await expect(settings.deleteButton()).toBeDisabled();
         await expect(settings.successText()).toBeVisible();
+        await expect(settings.syncSummary()).toContainText('Fields deleted: 4');
     });
 
      test('keeps the stored file when the delete modal is dismissed', async ({page}) => {
