@@ -203,7 +203,12 @@ func TestBuildPropertyValues(t *testing.T) {
 		Id:    "user123",
 		Email: "test@example.com",
 	}
+	userIdentityKeys := []string{"email"}
 	cache := testFieldIDCache()
+
+	buildForUser := func(client *pluginapi.Client, userAttrs map[string]interface{}) ([]*model.PropertyValue, error) {
+		return buildPropertyValues(client, model.PropertyValueTargetTypeUser, user.Id, userIdentityKeys, user.Email, groupID, userAttrs, cache)
+	}
 
 	t.Run("builds values for all field types", func(t *testing.T) {
 		api := &plugintest.API{}
@@ -217,7 +222,7 @@ func TestBuildPropertyValues(t *testing.T) {
 			"clearance":  "Top Secret",
 		}
 
-		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		values, err := buildForUser(client, userAttrs)
 		require.NoError(t, err)
 		assert.Len(t, values, 4) // email excluded
 
@@ -240,7 +245,7 @@ func TestBuildPropertyValues(t *testing.T) {
 			"programs": []string{"Apples", "Lemons"},
 		}
 
-		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		values, err := buildForUser(client, userAttrs)
 		require.NoError(t, err)
 		assert.Len(t, values, 1)
 
@@ -260,7 +265,7 @@ func TestBuildPropertyValues(t *testing.T) {
 			"clearance": "CUI",
 		}
 
-		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		values, err := buildForUser(client, userAttrs)
 		require.NoError(t, err)
 		assert.Len(t, values, 1)
 
@@ -278,7 +283,7 @@ func TestBuildPropertyValues(t *testing.T) {
 			"email": "test@example.com",
 		}
 
-		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		values, err := buildForUser(client, userAttrs)
 		require.NoError(t, err)
 		assert.Len(t, values, 0)
 	})
@@ -296,9 +301,9 @@ func TestBuildPropertyValues(t *testing.T) {
 		// Expect log warning for unknown field
 		api.On("LogWarn", "Unknown field name, skipping",
 			"field_name", "unknown_field",
-			"user_email", "test@example.com")
+			"record", "test@example.com")
 
-		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		values, err := buildForUser(client, userAttrs)
 		require.NoError(t, err)
 		assert.Len(t, values, 1) // Only job_title
 
@@ -317,10 +322,10 @@ func TestBuildPropertyValues(t *testing.T) {
 		// Expect log warning for unsupported type
 		api.On("LogWarn", "Unsupported field value type, skipping field",
 			"field_name", "job_title",
-			"user_email", "test@example.com",
+			"record", "test@example.com",
 			"value_type", "int")
 
-		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		values, err := buildForUser(client, userAttrs)
 		require.NoError(t, err)
 		assert.Len(t, values, 0)
 
@@ -333,9 +338,30 @@ func TestBuildPropertyValues(t *testing.T) {
 
 		userAttrs := map[string]interface{}{}
 
-		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		values, err := buildForUser(client, userAttrs)
 		require.NoError(t, err)
 		assert.Len(t, values, 0)
+	})
+
+	t.Run("builds values for a channel target with its own identity keys", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		channelAttrs := map[string]interface{}{
+			"team":      "engineering", // Identity keys, should be skipped
+			"channel":   "town-square",
+			"job_title": "General discussion",
+		}
+
+		values, err := buildPropertyValues(client, model.PropertyValueTargetTypeChannel, "channel123",
+			[]string{"team", "channel"}, "engineering/town-square", groupID, channelAttrs, cache)
+		require.NoError(t, err)
+		assert.Len(t, values, 1) // team and channel excluded
+
+		assert.Equal(t, groupID, values[0].GroupID)
+		assert.Equal(t, "channel", values[0].TargetType)
+		assert.Equal(t, "channel123", values[0].TargetID)
+		assert.Equal(t, "test_field_id_1", values[0].FieldID)
 	})
 }
 
