@@ -149,11 +149,12 @@ func buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string
 // SyncUsers writes attribute values from external data into Mattermost user attribute fields for all users.
 //
 //nolint:revive
-func SyncUsers(api *pluginapi.Client, groupID string, users []map[string]interface{}, cache *FieldIDCache) error {
+func SyncUsers(api *pluginapi.Client, groupID string, users []map[string]interface{}, cache *FieldIDCache, summary *Summary) error {
 	for _, userAttrs := range users {
 		email, ok := userAttrs["email"].(string)
 		if !ok || email == "" {
 			api.Log.Warn("User object missing email field, skipping")
+			summary.UsersSkipped++
 			continue
 		}
 
@@ -163,6 +164,7 @@ func SyncUsers(api *pluginapi.Client, groupID string, users []map[string]interfa
 			api.Log.Warn("User not found by email, skipping",
 				"email", email,
 				"error", err.Error())
+			summary.UsersSkipped++
 			continue
 		}
 
@@ -171,11 +173,13 @@ func SyncUsers(api *pluginapi.Client, groupID string, users []map[string]interfa
 			api.Log.Error("Failed to build property values, skipping user",
 				"user_email", email,
 				"error", err.Error())
+			summary.UsersSkipped++
 			continue
 		}
 
 		if len(values) == 0 {
 			api.Log.Debug("No property values to sync for user", "email", email)
+			summary.UsersSkipped++
 			continue
 		}
 
@@ -186,9 +190,11 @@ func SyncUsers(api *pluginapi.Client, groupID string, users []map[string]interfa
 				"user_email", email,
 				"value_count", len(values),
 				"error", err.Error())
+			summary.UsersSkipped++
 			continue
 		}
 
+		summary.UsersSynced++
 		api.Log.Debug("Successfully synced user attributes",
 			"email", email,
 			"attribute_count", len(values))

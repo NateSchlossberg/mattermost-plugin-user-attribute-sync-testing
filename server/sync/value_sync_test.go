@@ -370,8 +370,12 @@ func TestSyncUsers(t *testing.T) {
 			},
 		}
 
-		err := SyncUsers(client, groupID, users, cache)
+		summary := &Summary{}
+		err := SyncUsers(client, groupID, users, cache, summary)
 		require.NoError(t, err)
+		assert.Equal(t, 2, summary.UsersSynced)
+		assert.Equal(t, 0, summary.UsersSkipped)
+		assert.Equal(t, len(users), summary.UsersSynced+summary.UsersSkipped)
 
 		api.AssertExpectations(t)
 	})
@@ -397,8 +401,12 @@ func TestSyncUsers(t *testing.T) {
 			},
 		}
 
-		err := SyncUsers(client, groupID, users, cache)
+		summary := &Summary{}
+		err := SyncUsers(client, groupID, users, cache, summary)
 		require.NoError(t, err)
+		assert.Equal(t, 1, summary.UsersSynced)
+		assert.Equal(t, 1, summary.UsersSkipped)
+		assert.Equal(t, len(users), summary.UsersSynced+summary.UsersSkipped)
 
 		api.AssertExpectations(t)
 	})
@@ -429,8 +437,12 @@ func TestSyncUsers(t *testing.T) {
 			},
 		}
 
-		err := SyncUsers(client, groupID, users, cache)
+		summary := &Summary{}
+		err := SyncUsers(client, groupID, users, cache, summary)
 		require.NoError(t, err)
+		assert.Equal(t, 1, summary.UsersSynced)
+		assert.Equal(t, 1, summary.UsersSkipped)
+		assert.Equal(t, len(users), summary.UsersSynced+summary.UsersSkipped)
 
 		api.AssertExpectations(t)
 	})
@@ -450,8 +462,12 @@ func TestSyncUsers(t *testing.T) {
 			},
 		}
 
-		err := SyncUsers(client, groupID, users, cache)
+		summary := &Summary{}
+		err := SyncUsers(client, groupID, users, cache, summary)
 		require.NoError(t, err)
+		assert.Equal(t, 0, summary.UsersSynced)
+		assert.Equal(t, 1, summary.UsersSkipped)
+		assert.Equal(t, len(users), summary.UsersSynced+summary.UsersSkipped)
 
 		api.AssertExpectations(t)
 	})
@@ -493,8 +509,12 @@ func TestSyncUsers(t *testing.T) {
 			},
 		}
 
-		err := SyncUsers(client, groupID, users, cache)
+		summary := &Summary{}
+		err := SyncUsers(client, groupID, users, cache, summary)
 		require.NoError(t, err)
+		assert.Equal(t, 1, summary.UsersSynced)
+		assert.Equal(t, 1, summary.UsersSkipped)
+		assert.Equal(t, len(users), summary.UsersSynced+summary.UsersSkipped)
 
 		api.AssertExpectations(t)
 	})
@@ -505,8 +525,12 @@ func TestSyncUsers(t *testing.T) {
 
 		users := []map[string]interface{}{}
 
-		err := SyncUsers(client, groupID, users, cache)
+		summary := &Summary{}
+		err := SyncUsers(client, groupID, users, cache, summary)
 		require.NoError(t, err)
+		assert.Equal(t, 0, summary.UsersSynced)
+		assert.Equal(t, 0, summary.UsersSkipped)
+		assert.Equal(t, len(users), summary.UsersSynced+summary.UsersSkipped)
 
 		api.AssertExpectations(t)
 	})
