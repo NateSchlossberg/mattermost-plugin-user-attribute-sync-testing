@@ -6,8 +6,8 @@ import (
 	attrsync "github.com/mattermost/mattermost-plugin-user-attribute-sync-testing/server/sync"
 )
 
-// runSync applies the stored document: fields then values. The lock covers the read and the
-// sync so two triggers cannot interleave their property-service writes.
+// runSync holds the lock across the stored-document read and the sync so two triggers
+// cannot interleave their property-service writes.
 func (p *Plugin) runSync() (attrsync.Summary, error) {
 	p.syncLock.Lock()
 	defer p.syncLock.Unlock()
