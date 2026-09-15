@@ -17,6 +17,17 @@ type FieldIDCache struct {
 	// Maps option names (e.g., "Apples") to Mattermost option IDs for all select/multiselect/rank fields
 	// Option names are prefixed with field names to avoid name collision.
 	OptionNameToID map[string]string
+	// Maps external field names to the type declared in the document, so value sync can tell
+	// a rank/select string (write the option ID) from text or date (write the string).
+	FieldNameToType map[string]model.PropertyFieldType
+}
+
+func NewFieldIDCache() *FieldIDCache {
+	return &FieldIDCache{
+		FieldNameToID:   make(map[string]string),
+		OptionNameToID:  make(map[string]string),
+		FieldNameToType: make(map[string]model.PropertyFieldType),
+	}
 }
 
 // GetFieldID translates an external field name to its Mattermost field ID.
@@ -28,6 +39,11 @@ func (c *FieldIDCache) GetFieldID(fieldName string) string {
 func (c *FieldIDCache) GetOptionID(fieldName, optionName string) string {
 	// Keys are prefixes with field name to avoid option name collision
 	return c.OptionNameToID[fieldName+"|"+optionName]
+}
+
+// GetFieldType returns the type declared for fieldName, or the zero value if the name is unknown.
+func (c *FieldIDCache) GetFieldType(fieldName string) model.PropertyFieldType {
+	return c.FieldNameToType[fieldName]
 }
 
 // FieldDefinition is one field as stored in the uploaded document.
@@ -95,80 +111,6 @@ func permissionLevelPtr(value string) *model.PermissionLevel {
 		level = model.PermissionLevel(value)
 	}
 	return &level
-}
-
-// fieldDefinitions contains all user attribute fields this plugin creates.
-// These are per-user metadata fields stored in the access_control property
-// group, so they appear on user profiles and can also be referenced from
-// attribute-based access control (ABAC) policy rules. This plugin ensures
-// these fields exist on startup and syncs external data into them.
-//
-// The four fields below cover the three access modes between them, so a test environment gets one
-// of each. Edit this array to create the attributes a particular test needs.
-//
-// All fields are marked as "protected" (see createField function), which means:
-//   - Only this plugin can modify the field structure (add/remove options, change types)
-//   - Only this plugin can write values (users and admins cannot manually edit)
-//   - Access modes control read permissions (who can see the data)
-var fieldDefinitions = []FieldDefinition{
-	{
-		// Public: readable by everyone, while still being plugin-managed and not admin-editable.
-		Name:        "job_title",
-		DisplayName: "Job Title",
-		Type:        model.PropertyFieldTypeText,
-		AccessMode:  model.PropertyAccessModePublic,
-	},
-	{
-		// Shared-only on a multiselect: viewing another user's profile shows only the programs
-		// both users are in.
-		Name:        "programs",
-		DisplayName: "Programs",
-		Type:        model.PropertyFieldTypeMultiselect,
-		Options: []model.CustomProfileAttributesSelectOption{
-			{Name: "Apples"},
-			{Name: "Oranges"},
-			{Name: "Lemons"},
-			{Name: "Grapes"},
-		},
-		AccessMode: model.PropertyAccessModeSharedOnly,
-	},
-	{
-		// Shared-only on a rank field (requires Mattermost server v11.9 or later). Rank is like
-		// Select, except each option carries a number, so policies can compare with inequalities
-		// (e.g. Clearance >= "Secret"). On a rank field, a user sees their own level and lower.
-		Name:        "clearance",
-		DisplayName: "Clearance",
-		Type:        model.PropertyFieldTypeRank,
-		Options: []model.CustomProfileAttributesSelectOption{
-			{Name: "CUI", Rank: model.NewPointer(1)},
-			{Name: "Confidential", Rank: model.NewPointer(2)},
-			{Name: "Secret", Rank: model.NewPointer(3)},
-			{Name: "Top Secret", Rank: model.NewPointer(4)},
-		},
-		AccessMode: model.PropertyAccessModeSharedOnly,
-	},
-	{
-		// Source-only: only this plugin can read the values. Admins, integrations, and the user
-		// themselves see nothing.
-		Name:        "start_date",
-		DisplayName: "Start Date",
-		Type:        model.PropertyFieldTypeDate,
-		AccessMode:  model.PropertyAccessModeSourceOnly,
-	},
-}
-
-// fieldDefinitionsByName indexes fieldDefinitions by Name so value sync can
-// look up a field's definition from the key it sees in the external data.
-// Go initializes package-level variables in dependency order, so this is
-// populated after fieldDefinitions regardless of declaration order.
-var fieldDefinitionsByName = indexFieldDefinitions(fieldDefinitions)
-
-func indexFieldDefinitions(defs []FieldDefinition) map[string]FieldDefinition {
-	byName := make(map[string]FieldDefinition, len(defs))
-	for _, def := range defs {
-		byName[def.Name] = def
-	}
-	return byName
 }
 
 // updateField updates an existing user attribute field to match the definition.
@@ -484,21 +426,19 @@ func extractOptionIDs(
 	return nil
 }
 
-// SyncFields ensures all user attribute fields exist and match the definitions.
+// SyncFields ensures all user attribute fields exist and match the given definitions.
 // Returns a FieldIDCache containing mappings from external names to Mattermost-generated IDs.
 //
 //nolint:revive
-func SyncFields(client *pluginapi.Client, groupID string, pluginID string) (*FieldIDCache, error) {
-	client.Log.Info("Syncing field definitions", "field_count", len(fieldDefinitions))
+func SyncFields(client *pluginapi.Client, groupID, pluginID string, defs []FieldDefinition) (*FieldIDCache, error) {
+	client.Log.Info("Syncing field definitions", "field_count", len(defs))
 
-	cache := &FieldIDCache{
-		FieldNameToID:  make(map[string]string),
-		OptionNameToID: make(map[string]string),
-	}
+	cache := NewFieldIDCache()
 
 	var failedFields []string
 
-	for _, def := range fieldDefinitions {
+	for _, def := range defs {
+		cache.FieldNameToType[def.Name] = def.Type
 		_, err := syncSingleField(client, groupID, pluginID, def, cache)
 		if err != nil {
 			client.Log.Error("Failed to sync field",
@@ -518,7 +458,7 @@ func SyncFields(client *pluginapi.Client, groupID string, pluginID string) (*Fie
 	}
 
 	client.Log.Info("Field sync completed",
-		"total", len(fieldDefinitions),
+		"total", len(defs),
 		"failed", len(failedFields),
 		"fields_cached", len(cache.FieldNameToID),
 		"options_cached", len(cache.OptionNameToID))

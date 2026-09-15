@@ -68,14 +68,26 @@ func (p *Plugin) OnActivate() error {
 	}
 	p.groupID = group.ID
 
-	// Sync field definitions on plugin activation and load their IDs.
-	// Creates/updates the user attribute fields and stores the auto-generated
-	// IDs for use during value sync.
-	p.fieldIDCache, err = attrsync.SyncFields(p.client, p.groupID, manifest.Id)
+	stored, err := attrsync.ReadStoredAttributes(p.client)
 	if err != nil {
-		return errors.Wrap(err, "failed to sync field definitions")
+		return errors.Wrap(err, "failed to read stored attributes")
 	}
-	p.client.Log.Info("Field sync completed successfully")
+
+	p.fieldIDCache = attrsync.NewFieldIDCache()
+	if len(stored.Data) == 0 {
+		p.client.Log.Info("No attributes document stored, skipping field sync")
+	} else {
+		doc, parseErr := attrsync.ParseAttributesDocument(stored.Data)
+		if parseErr != nil {
+			p.client.Log.Error("Failed to parse stored attributes document, skipping field sync", "error", parseErr.Error())
+		} else {
+			p.fieldIDCache, err = attrsync.SyncFields(p.client, p.groupID, manifest.Id, doc.Fields.User)
+			if err != nil {
+				return errors.Wrap(err, "failed to sync field definitions")
+			}
+			p.client.Log.Info("Field sync completed successfully")
+		}
+	}
 
 	p.attributeSource = attrsync.NewKVStoreProvider(p.client)
 

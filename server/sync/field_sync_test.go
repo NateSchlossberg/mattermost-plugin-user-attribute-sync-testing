@@ -13,9 +13,51 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func testFieldDefinitions() []FieldDefinition {
+	return []FieldDefinition{
+		{
+			Name:        "job_title",
+			DisplayName: "Job Title",
+			Type:        model.PropertyFieldTypeText,
+			AccessMode:  model.PropertyAccessModePublic,
+		},
+		{
+			Name:        "programs",
+			DisplayName: "Programs",
+			Type:        model.PropertyFieldTypeMultiselect,
+			Options: []model.CustomProfileAttributesSelectOption{
+				{Name: "Apples"},
+				{Name: "Oranges"},
+				{Name: "Lemons"},
+				{Name: "Grapes"},
+			},
+			AccessMode: model.PropertyAccessModeSharedOnly,
+		},
+		{
+			Name:        "clearance",
+			DisplayName: "Clearance",
+			Type:        model.PropertyFieldTypeRank,
+			Options: []model.CustomProfileAttributesSelectOption{
+				{Name: "CUI", Rank: model.NewPointer(1)},
+				{Name: "Confidential", Rank: model.NewPointer(2)},
+				{Name: "Secret", Rank: model.NewPointer(3)},
+				{Name: "Top Secret", Rank: model.NewPointer(4)},
+			},
+			AccessMode: model.PropertyAccessModeSharedOnly,
+		},
+		{
+			Name:        "start_date",
+			DisplayName: "Start Date",
+			Type:        model.PropertyFieldTypeDate,
+			AccessMode:  model.PropertyAccessModeSourceOnly,
+		},
+	}
+}
+
 func TestSyncFields(t *testing.T) {
 	groupID := "test-group-id"
 	pluginID := "test-plugin-id"
+	defs := testFieldDefinitions()
 
 	t.Run("creates all fields and returns ID cache", func(t *testing.T) {
 		api := &plugintest.API{}
@@ -73,7 +115,7 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID)
+		cache, err := SyncFields(client, groupID, pluginID, defs)
 
 		require.NoError(t, err)
 		require.NotNil(t, cache)
@@ -81,6 +123,10 @@ func TestSyncFields(t *testing.T) {
 		assert.Equal(t, "generated_id_2", cache.GetFieldID("programs"))
 		assert.Equal(t, "generated_id_3", cache.GetFieldID("clearance"))
 		assert.Equal(t, "generated_id_4", cache.GetFieldID("start_date"))
+		assert.Equal(t, model.PropertyFieldTypeText, cache.GetFieldType("job_title"))
+		assert.Equal(t, model.PropertyFieldTypeMultiselect, cache.GetFieldType("programs"))
+		assert.Equal(t, model.PropertyFieldTypeRank, cache.GetFieldType("clearance"))
+		assert.Equal(t, model.PropertyFieldTypeDate, cache.GetFieldType("start_date"))
 		assert.Equal(t, "opt_id_1", cache.GetOptionID("programs", "Apples"))
 		assert.Equal(t, "opt_id_2", cache.GetOptionID("programs", "Oranges"))
 		assert.Equal(t, "opt_id_3", cache.GetOptionID("programs", "Lemons"))
@@ -167,7 +213,7 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID)
+		cache, err := SyncFields(client, groupID, pluginID, defs)
 
 		require.NoError(t, err)
 		require.NotNil(t, cache)
@@ -244,7 +290,7 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID)
+		cache, err := SyncFields(client, groupID, pluginID, defs)
 
 		require.NoError(t, err)
 		assert.True(t, multiSelectOptionsVerified, "Options should be verified during field creation")
@@ -288,11 +334,25 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID)
+		cache, err := SyncFields(client, groupID, pluginID, defs)
 
 		// Should not return error (graceful degradation)
 		require.NoError(t, err)
 		require.NotNil(t, cache)
+	})
+
+	t.Run("empty list creates no fields", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		cache, err := SyncFields(client, groupID, pluginID, nil)
+
+		require.NoError(t, err)
+		require.NotNil(t, cache)
+		assert.Empty(t, cache.FieldNameToID)
+		assert.Empty(t, cache.FieldNameToType)
+		api.AssertExpectations(t)
 	})
 }
 
@@ -344,6 +404,15 @@ func TestFieldIDCache(t *testing.T) {
 			OptionNameToID: make(map[string]string),
 		}
 		assert.Equal(t, "", cache.GetOptionID("programs", "Unknown"))
+	})
+
+	t.Run("GetFieldType returns declared types", func(t *testing.T) {
+		cache := NewFieldIDCache()
+		cache.FieldNameToType["job_title"] = model.PropertyFieldTypeText
+		cache.FieldNameToType["clearance"] = model.PropertyFieldTypeRank
+		assert.Equal(t, model.PropertyFieldTypeText, cache.GetFieldType("job_title"))
+		assert.Equal(t, model.PropertyFieldTypeRank, cache.GetFieldType("clearance"))
+		assert.Equal(t, model.PropertyFieldType(""), cache.GetFieldType("unknown_field"))
 	})
 }
 
@@ -422,14 +491,4 @@ func TestFieldDefinitionDefaults(t *testing.T) {
 			assert.Equal(t, tt.wantPermissionOptions, *def.permissionOptions())
 		})
 	}
-
-	t.Run("hardcoded definitions still resolve to today's access modes", func(t *testing.T) {
-		byName := fieldDefinitionsByName
-		assert.Equal(t, model.PropertyAccessModePublic, byName["job_title"].accessMode())
-		assert.Equal(t, model.PropertyAccessModeSharedOnly, byName["programs"].accessMode())
-		assert.Equal(t, model.PropertyAccessModeSharedOnly, byName["clearance"].accessMode())
-		assert.Equal(t, model.PropertyAccessModeSourceOnly, byName["start_date"].accessMode())
-		assert.Equal(t, model.PropertyFieldVisibilityAlways, byName["job_title"].visibility())
-		assert.Equal(t, model.PermissionLevelSysadmin, *byName["job_title"].permissionField())
-	})
 }

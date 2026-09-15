@@ -30,6 +30,12 @@ func testFieldIDCache() *FieldIDCache {
 			"clearance|Secret":       "test_opt_id_secret",
 			"clearance|Top Secret":   "test_opt_id_top_secret",
 		},
+		FieldNameToType: map[string]model.PropertyFieldType{
+			"job_title":  model.PropertyFieldTypeText,
+			"programs":   model.PropertyFieldTypeMultiselect,
+			"clearance":  model.PropertyFieldTypeRank,
+			"start_date": model.PropertyFieldTypeDate,
+		},
 	}
 }
 
