@@ -127,4 +127,46 @@ func TestSyncDocument(t *testing.T) {
 		assert.Equal(t, 0, summary.ChannelsSynced)
 		assert.Equal(t, 0, summary.ChannelsSkipped)
 	})
+
+	t.Run("runs the deletion scan once per document", func(t *testing.T) {
+		client, api := newTestSyncClient(t)
+
+		omitted := &model.PropertyField{
+			ID:         model.NewId(),
+			Name:       "old_title",
+			ObjectType: model.PropertyFieldObjectTypeUser,
+			CreateAt:   1,
+			Attrs:      model.StringInterface{model.PropertyAttrsSourcePluginID: pluginID},
+		}
+		api.On("SearchPropertyFields", groupID, mock.MatchedBy(func(opts model.PropertyFieldSearchOpts) bool {
+			return len(opts.ObjectTypes) == 1 && opts.ObjectTypes[0] == model.PropertyFieldObjectTypeUser
+		})).Return([]*model.PropertyField{}, nil)
+		api.On("SearchPropertyFields", groupID, mock.MatchedBy(func(opts model.PropertyFieldSearchOpts) bool {
+			return len(opts.ObjectTypes) == 0
+		})).Return([]*model.PropertyField{omitted}, nil).Once()
+		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
+			return f.Name == "job_title"
+		})).Return(&model.PropertyField{ID: "generated_id_1", Name: "job_title", Type: model.PropertyFieldTypeText}, nil)
+		mock.InOrder(
+			api.On("DeletePropertyValuesForField", groupID, omitted.ID).Return(nil).Once(),
+			api.On("DeletePropertyField", groupID, omitted.ID).Return(nil).Once(),
+		)
+
+		doc := AttributesDocument{
+			Version: SupportedDocumentVersion,
+			Fields: FieldSchema{
+				User: []FieldDefinition{{
+					Name:        "job_title",
+					DisplayName: "Job Title",
+					Type:        model.PropertyFieldTypeText,
+					AccessMode:  model.PropertyAccessModePublic,
+				}},
+			},
+		}
+
+		summary, err := SyncDocument(client, groupID, pluginID, doc)
+		require.NoError(t, err)
+		assert.Equal(t, 1, summary.FieldsCreated)
+		assert.Equal(t, 1, summary.FieldsDeleted)
+	})
 }

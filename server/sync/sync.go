@@ -27,6 +27,10 @@ func SyncDocument(client *pluginapi.Client, groupID, pluginID string, doc Attrib
 		return summary, err
 	}
 
+	// One deletion pass per document, after every field pass: run from inside
+	// SyncFields, a user-only keep-set would delete the channel fields.
+	DeleteOmittedFields(client, groupID, pluginID, doc.Fields.User, doc.Fields.Channel, &summary)
+
 	if err := SyncUsers(client, groupID, doc.Users, cache, &summary); err != nil {
 		return summary, err
 	}

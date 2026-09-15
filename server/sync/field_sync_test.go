@@ -425,31 +425,53 @@ func TestSyncFields(t *testing.T) {
 		api.AssertNotCalled(t, "CreatePropertyField", mock.Anything)
 	})
 
+	t.Run("does not delete fields itself", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+		mockEmptyFieldSearch(api, groupID)
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		_, err := SyncFields(client, groupID, pluginID, model.PropertyFieldObjectTypeUser, nil, &Summary{})
+
+		require.NoError(t, err)
+		api.AssertNotCalled(t, "DeletePropertyValuesForField", mock.Anything, mock.Anything)
+		api.AssertNotCalled(t, "DeletePropertyField", mock.Anything, mock.Anything)
+	})
+}
+
+func TestDeleteOmittedFields(t *testing.T) {
+	groupID := "test-group-id"
+	pluginID := "test-plugin-id"
+
+	// mockDeletionScan serves only the unfiltered deletion scan, returning the
+	// given fields. The ObjectTypes-filtered lookup SyncFields does does not match.
+	mockDeletionScan := func(api *plugintest.API, fields ...*model.PropertyField) *mock.Call {
+		return api.On("SearchPropertyFields", groupID, mock.MatchedBy(func(opts model.PropertyFieldSearchOpts) bool {
+			return opts.PerPage == fieldSearchPerPage && opts.TargetType == "" && len(opts.ObjectTypes) == 0 && opts.Cursor.PropertyFieldID == ""
+		})).Return(fields, nil)
+	}
+
 	t.Run("deletes omitted plugin-owned fields values first", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
 		omitted := &model.PropertyField{
-			ID:       model.NewId(),
-			Name:     "old_title",
-			CreateAt: 1,
-			Attrs:    model.StringInterface{model.PropertyAttrsSourcePluginID: pluginID},
+			ID:         model.NewId(),
+			Name:       "old_title",
+			ObjectType: model.PropertyFieldObjectTypeUser,
+			CreateAt:   1,
+			Attrs:      model.StringInterface{model.PropertyAttrsSourcePluginID: pluginID},
 		}
-		mockFieldLookup(api, groupID)
-		api.On("SearchPropertyFields", groupID, mock.MatchedBy(func(opts model.PropertyFieldSearchOpts) bool {
-			return opts.PerPage == fieldSearchPerPage && opts.TargetType == "" && len(opts.ObjectTypes) == 0 && opts.Cursor.PropertyFieldID == ""
-		})).Return([]*model.PropertyField{omitted}, nil).Once()
+		mockDeletionScan(api, omitted).Once()
 		mock.InOrder(
 			api.On("DeletePropertyValuesForField", groupID, omitted.ID).Return(nil).Once(),
 			api.On("DeletePropertyField", groupID, omitted.ID).Return(nil).Once(),
 		)
-		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		summary := &Summary{}
-		cache, err := SyncFields(client, groupID, pluginID, model.PropertyFieldObjectTypeUser, nil, summary)
+		DeleteOmittedFields(client, groupID, pluginID, nil, nil, summary)
 
-		require.NoError(t, err)
-		require.NotNil(t, cache)
 		assert.Equal(t, 1, summary.FieldsDeleted)
 		api.AssertExpectations(t)
 	})
@@ -468,17 +490,11 @@ func TestSyncFields(t *testing.T) {
 			CreateAt: 2,
 			Attrs:    model.StringInterface{model.PropertyAttrsSourcePluginID: "other.plugin"},
 		}
-		mockFieldLookup(api, groupID)
-		api.On("SearchPropertyFields", groupID, mock.MatchedBy(func(opts model.PropertyFieldSearchOpts) bool {
-			return len(opts.ObjectTypes) == 0
-		})).Return([]*model.PropertyField{adminField, otherPluginField}, nil).Once()
-		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		mockDeletionScan(api, adminField, otherPluginField).Once()
 		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID, model.PropertyFieldObjectTypeUser, nil, &Summary{})
+		DeleteOmittedFields(client, groupID, pluginID, nil, nil, &Summary{})
 
-		require.NoError(t, err)
-		require.NotNil(t, cache)
 		api.AssertExpectations(t)
 		api.AssertNotCalled(t, "DeletePropertyValuesForField", mock.Anything, mock.Anything)
 		api.AssertNotCalled(t, "DeletePropertyField", mock.Anything, mock.Anything)
@@ -487,43 +503,83 @@ func TestSyncFields(t *testing.T) {
 	t.Run("does not delete fields named in the document", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
-		keep := defs[0]
+		keep := testFieldDefinitions()[0]
 		existing := &model.PropertyField{
-			ID:       model.NewId(),
-			Name:     keep.Name,
-			CreateAt: 1,
-			Type:     keep.Type,
-			Attrs:    model.StringInterface{model.PropertyAttrsSourcePluginID: pluginID},
+			ID:         model.NewId(),
+			Name:       keep.Name,
+			ObjectType: model.PropertyFieldObjectTypeUser,
+			CreateAt:   1,
+			Type:       keep.Type,
+			Attrs:      model.StringInterface{model.PropertyAttrsSourcePluginID: pluginID},
 		}
 		omitted := &model.PropertyField{
-			ID:       model.NewId(),
-			Name:     "old_title",
-			CreateAt: 2,
-			Attrs:    model.StringInterface{model.PropertyAttrsSourcePluginID: pluginID},
+			ID:         model.NewId(),
+			Name:       "old_title",
+			ObjectType: model.PropertyFieldObjectTypeUser,
+			CreateAt:   2,
+			Attrs:      model.StringInterface{model.PropertyAttrsSourcePluginID: pluginID},
 		}
-		mockFieldLookup(api, groupID, existing)
-		api.On("UpdatePropertyField", groupID, mock.MatchedBy(func(f *model.PropertyField) bool {
-			return f.ID == existing.ID
-		})).Return(existing, nil).Once()
-		api.On("SearchPropertyFields", groupID, mock.MatchedBy(func(opts model.PropertyFieldSearchOpts) bool {
-			return len(opts.ObjectTypes) == 0
-		})).Return([]*model.PropertyField{existing, omitted}, nil).Once()
+		mockDeletionScan(api, existing, omitted).Once()
 		mock.InOrder(
 			api.On("DeletePropertyValuesForField", groupID, omitted.ID).Return(nil).Once(),
 			api.On("DeletePropertyField", groupID, omitted.ID).Return(nil).Once(),
 		)
-		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		summary := &Summary{}
-		cache, err := SyncFields(client, groupID, pluginID, model.PropertyFieldObjectTypeUser, []FieldDefinition{keep}, summary)
+		DeleteOmittedFields(client, groupID, pluginID, []FieldDefinition{keep}, nil, summary)
 
-		require.NoError(t, err)
-		assert.Equal(t, existing.ID, cache.GetFieldID(keep.Name))
-		assert.Equal(t, 1, summary.FieldsUpdated)
 		assert.Equal(t, 1, summary.FieldsDeleted)
 		api.AssertExpectations(t)
 		api.AssertNotCalled(t, "DeletePropertyField", groupID, existing.ID)
+	})
+
+	t.Run("a channel def does not protect a same-named user field", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+		userField := &model.PropertyField{
+			ID:         model.NewId(),
+			Name:       "classification",
+			ObjectType: model.PropertyFieldObjectTypeUser,
+			CreateAt:   1,
+			Attrs:      model.StringInterface{model.PropertyAttrsSourcePluginID: pluginID},
+		}
+		mockDeletionScan(api, userField).Once()
+		mock.InOrder(
+			api.On("DeletePropertyValuesForField", groupID, userField.ID).Return(nil).Once(),
+			api.On("DeletePropertyField", groupID, userField.ID).Return(nil).Once(),
+		)
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		summary := &Summary{}
+		DeleteOmittedFields(client, groupID, pluginID, nil, []FieldDefinition{{Name: "classification"}}, summary)
+
+		assert.Equal(t, 1, summary.FieldsDeleted)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("a user def does not protect a same-named channel field", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+		channelField := &model.PropertyField{
+			ID:         model.NewId(),
+			Name:       "classification",
+			ObjectType: model.PropertyFieldObjectTypeChannel,
+			CreateAt:   1,
+			Attrs:      model.StringInterface{model.PropertyAttrsSourcePluginID: pluginID},
+		}
+		mockDeletionScan(api, channelField).Once()
+		mock.InOrder(
+			api.On("DeletePropertyValuesForField", groupID, channelField.ID).Return(nil).Once(),
+			api.On("DeletePropertyField", groupID, channelField.ID).Return(nil).Once(),
+		)
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		summary := &Summary{}
+		DeleteOmittedFields(client, groupID, pluginID, []FieldDefinition{{Name: "classification"}}, nil, summary)
+
+		assert.Equal(t, 1, summary.FieldsDeleted)
+		api.AssertExpectations(t)
 	})
 
 	t.Run("pages through search results", func(t *testing.T) {
@@ -544,10 +600,7 @@ func TestSyncFields(t *testing.T) {
 			CreateAt: int64(fieldSearchPerPage + 1),
 			Attrs:    model.StringInterface{model.PropertyAttrsSourcePluginID: pluginID},
 		}}
-		mockFieldLookup(api, groupID)
-		api.On("SearchPropertyFields", groupID, mock.MatchedBy(func(opts model.PropertyFieldSearchOpts) bool {
-			return opts.PerPage == fieldSearchPerPage && len(opts.ObjectTypes) == 0 && opts.Cursor.PropertyFieldID == ""
-		})).Return(page1, nil).Once()
+		mockDeletionScan(api, page1...).Once()
 		last := page1[len(page1)-1]
 		api.On("SearchPropertyFields", groupID, mock.MatchedBy(func(opts model.PropertyFieldSearchOpts) bool {
 			return len(opts.ObjectTypes) == 0 && opts.Cursor.PropertyFieldID == last.ID && opts.Cursor.CreateAt == last.CreateAt
@@ -556,37 +609,25 @@ func TestSyncFields(t *testing.T) {
 			api.On("DeletePropertyValuesForField", groupID, field.ID).Return(nil).Once()
 			api.On("DeletePropertyField", groupID, field.ID).Return(nil).Once()
 		}
-		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		summary := &Summary{}
-		cache, err := SyncFields(client, groupID, pluginID, model.PropertyFieldObjectTypeUser, nil, summary)
+		DeleteOmittedFields(client, groupID, pluginID, nil, nil, summary)
 
-		require.NoError(t, err)
-		require.NotNil(t, cache)
 		assert.Equal(t, fieldSearchPerPage+1, summary.FieldsDeleted)
 		api.AssertExpectations(t)
 	})
 
-	t.Run("search error aborts deletion and still returns the cache", func(t *testing.T) {
+	t.Run("search error aborts deletion", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
-		keep := defs[0]
-		mockFieldLookup(api, groupID)
-		created := &model.PropertyField{ID: "generated_id_1", Name: keep.Name, Type: keep.Type}
-		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
-			return f.Name == keep.Name
-		})).Return(created, nil).Once()
 		api.On("SearchPropertyFields", groupID, mock.MatchedBy(func(opts model.PropertyFieldSearchOpts) bool {
 			return len(opts.ObjectTypes) == 0
 		})).Return(nil, errors.New("search failed")).Once()
-		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID, model.PropertyFieldObjectTypeUser, []FieldDefinition{keep}, &Summary{})
+		DeleteOmittedFields(client, groupID, pluginID, nil, nil, &Summary{})
 
-		require.NoError(t, err)
-		assert.Equal(t, created.ID, cache.GetFieldID(keep.Name))
 		api.AssertExpectations(t)
 		api.AssertNotCalled(t, "DeletePropertyValuesForField", mock.Anything, mock.Anything)
 		api.AssertNotCalled(t, "DeletePropertyField", mock.Anything, mock.Anything)
@@ -613,10 +654,7 @@ func TestSyncFields(t *testing.T) {
 			CreateAt: 3,
 			Attrs:    model.StringInterface{model.PropertyAttrsSourcePluginID: pluginID},
 		}
-		mockFieldLookup(api, groupID)
-		api.On("SearchPropertyFields", groupID, mock.MatchedBy(func(opts model.PropertyFieldSearchOpts) bool {
-			return len(opts.ObjectTypes) == 0
-		})).Return([]*model.PropertyField{first, second, third}, nil).Once()
+		mockDeletionScan(api, first, second, third).Once()
 		api.On("DeletePropertyValuesForField", groupID, first.ID).Return(errors.New("values failed")).Once()
 		mock.InOrder(
 			api.On("DeletePropertyValuesForField", groupID, second.ID).Return(nil).Once(),
@@ -624,15 +662,12 @@ func TestSyncFields(t *testing.T) {
 		)
 		api.On("DeletePropertyValuesForField", groupID, third.ID).Return(nil).Once()
 		api.On("DeletePropertyField", groupID, third.ID).Return(errors.New("field failed")).Once()
-		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		summary := &Summary{}
-		cache, err := SyncFields(client, groupID, pluginID, model.PropertyFieldObjectTypeUser, nil, summary)
+		DeleteOmittedFields(client, groupID, pluginID, nil, nil, summary)
 
-		require.NoError(t, err)
-		require.NotNil(t, cache)
 		assert.Equal(t, 1, summary.FieldsDeleted)
 		api.AssertExpectations(t)
 		api.AssertNotCalled(t, "DeletePropertyField", groupID, first.ID)

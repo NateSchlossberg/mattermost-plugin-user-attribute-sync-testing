@@ -450,8 +450,6 @@ func SyncFields(client *pluginapi.Client, groupID, pluginID, objectType string, 
 	}
 	summary.FieldsSkipped += len(failedFields)
 
-	DeleteOmittedFields(client, groupID, pluginID, defs, summary)
-
 	client.Log.Info("Field sync completed",
 		"total", len(defs),
 		"failed", len(failedFields),
@@ -493,10 +491,16 @@ func searchGroupFields(client *pluginapi.Client, groupID string, objectTypes []s
 
 // Values are deleted before the field so the server can authorize the value
 // delete against a live field.
-func DeleteOmittedFields(client *pluginapi.Client, groupID, pluginID string, defs []FieldDefinition, summary *Summary) {
-	named := make(map[string]struct{}, len(defs))
-	for _, def := range defs {
-		named[def.Name] = struct{}{}
+//
+// The keep-set is keyed by object type and name: a user field and a channel
+// field may share a name, and the document may define one without the other.
+func DeleteOmittedFields(client *pluginapi.Client, groupID, pluginID string, userDefs, channelDefs []FieldDefinition, summary *Summary) {
+	named := make(map[string]struct{}, len(userDefs)+len(channelDefs))
+	for _, def := range userDefs {
+		named[model.PropertyFieldObjectTypeUser+"|"+def.Name] = struct{}{}
+	}
+	for _, def := range channelDefs {
+		named[model.PropertyFieldObjectTypeChannel+"|"+def.Name] = struct{}{}
 	}
 
 	fields, err := searchGroupFields(client, groupID, nil)
@@ -506,7 +510,7 @@ func DeleteOmittedFields(client *pluginapi.Client, groupID, pluginID string, def
 	}
 
 	for _, field := range fields {
-		if _, keep := named[field.Name]; keep {
+		if _, keep := named[field.ObjectType+"|"+field.Name]; keep {
 			continue
 		}
 
