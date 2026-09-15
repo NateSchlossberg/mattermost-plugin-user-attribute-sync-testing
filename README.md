@@ -44,27 +44,30 @@ The attributes appear in **System Console → User Attributes**, on user profile
 
    Click **Save**.
 
-3. Edit `data/user_attributes.json` to use the email addresses of users on your server, then upload it with **Choose File** and **Upload** in the same section.
+3. Edit `data/attributes.json` to use the email addresses of users on your server, then upload it with **Choose File** and **Upload** in the same section.
 
 The plugin creates the attributes as soon as it activates. Uploading a file does not trigger a sync, so the values appear on the next sync — within a minute at the interval above.
 
 ## The data file
 
-A JSON array of objects, one per user:
+A JSON document with a `version` and a `users` array, one record per user:
 
 ```json
-[
-  {
-    "email": "john.doe@example.com",
-    "job_title": "Software Engineer",
-    "programs": ["Apples", "Oranges"],
-    "clearance": "Top Secret",
-    "start_date": "2023-01-15"
-  }
-]
+{
+  "version": 2,
+  "users": [
+    {
+      "email": "john.doe@example.com",
+      "job_title": "Software Engineer",
+      "programs": ["Apples", "Oranges"],
+      "clearance": "Top Secret",
+      "start_date": "2023-01-15"
+    }
+  ]
+}
 ```
 
-`data/user_attributes.json` in this repository is an example of the format. Replace the email addresses with your own test users before uploading it.
+`data/attributes.json` in this repository is an example of the format. Replace the email addresses with your own test users before uploading it. Its `fields` key describes the same four attributes listed above, but the plugin does not read it yet: attribute definitions still come from `server/sync/field_sync.go`, and only `version` and `users` are used. `version` must be `2` — an older upload in the bare-array format is rejected.
 
 - `email` matches the record to a Mattermost user. It is never written as an attribute.
 - Every other key is an attribute name from the definitions in `server/sync/field_sync.go`. Keys that do not match a known attribute are skipped with a warning in the logs.
@@ -82,7 +85,7 @@ The settings section shows a panel for the stored file. It reports whether a fil
 
 These buttons act immediately and do not go through the console's **Save** button.
 
-Files are checked before upload: they must be a JSON array of objects and no larger than 10 MB. Individual records are not validated, because one bad record should not stop the rest of the file from syncing.
+Files are checked before upload: they must be a JSON document with `version: 2` and no larger than 10 MB. Individual records are not validated, because one bad record should not stop the rest of the file from syncing.
 
 ### Loading data over HTTP
 
@@ -90,18 +93,18 @@ The upload panel is a client for four endpoints, which are useful for seeding a 
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `POST` | `/user_attributes` | Store a file. The body is the raw JSON. |
-| `GET` | `/user_attributes` | Download the stored file. |
-| `GET` | `/user_attributes/status` | `{"exists": bool, "lastUpdated": time\|null}` |
-| `DELETE` | `/user_attributes` | Remove the stored file. |
+| `POST` | `/attributes` | Store a document. The body is the raw JSON. |
+| `GET` | `/attributes` | Download the stored document. |
+| `GET` | `/attributes/status` | `{"exists": bool, "lastUpdated": time\|null}` |
+| `DELETE` | `/attributes` | Remove the stored document. |
 
 Full paths are prefixed with `/plugins/com.mattermost.user-attribute-sync-test-tool`.
 
 ```bash
 curl -X POST \
   -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
-  --data-binary @data/user_attributes.json \
-  http://localhost:8065/plugins/com.mattermost.user-attribute-sync-test-tool/user_attributes
+  --data-binary @data/attributes.json \
+  http://localhost:8065/plugins/com.mattermost.user-attribute-sync-test-tool/attributes
 ```
 
 ## How syncing works
@@ -224,10 +227,11 @@ Mattermost does not allow an attribute's type to change after it is created. To 
 │   ├── sync/
 │   │   ├── field_sync.go         # Attribute definitions and schema reconciliation
 │   │   ├── value_sync.go         # Writing per-user values
-│   │   └── kv_store_provider.go  # Reads the uploaded file from the key-value store
+│   │   ├── document.go           # Parses the uploaded document, shared by upload and sync
+│   │   └── kv_store_provider.go  # Reads the uploaded document from the key-value store
 │   ├── plugin.go                 # OnActivate / OnDeactivate
 │   ├── configuration.go          # Settings
-│   ├── http_hooks.go             # The /user_attributes endpoints
+│   ├── http_hooks.go             # The /attributes endpoints
 │   └── job.go                    # Background sync job
 ├── webapp/src/
 │   ├── index.tsx                 # Registers the custom admin console setting
@@ -236,7 +240,7 @@ Mattermost does not allow an attribute's type to change after it is created. To 
 │       └── confirm_modal.tsx           # Confirmation dialog for deletion
 ├── e2e/                          # Playwright tests — see e2e/README.md
 └── data/
-    └── user_attributes.json      # Example data file
+    └── attributes.json           # Example data file
 ```
 
 ```bash

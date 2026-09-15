@@ -48,12 +48,13 @@ All fields and values are stored in the `access_control` property group (`model.
 | File | Role |
 |------|------|
 | `server/plugin.go` | Plugin struct, OnActivate/OnDeactivate lifecycle hooks. Initializes the API router, field sync, and background job. |
-| `server/http_hooks.go` | `ServeHTTP` + `initializeAPI()`. The `gorilla/mux` router and the four `/user_attributes` handlers, the sysadmin permission check, and the JSON response helpers. |
+| `server/http_hooks.go` | `ServeHTTP` + `initializeAPI()`. The `gorilla/mux` router and the four `/attributes` handlers, the sysadmin permission check, and the JSON response helpers. |
 | `server/job.go` | Cluster-aware job scheduling via `cluster.Schedule()`. Contains `nextWaitInterval()` (calculates delay) and `runSync()` (executes the sync by fetching from the plugin's `KVStoreProvider` and calling `sync.SyncUsers()`). |
 | `server/configuration.go` | Thread-safe config management with RWMutex. Settings: `SyncIntervalMinutes` (default 60). |
 | `server/sync/field_sync.go` | Field definitions array and schema management. Creates/updates user attribute fields. Maintains `FieldIDCache` mapping external names to Mattermost-generated IDs. |
 | `server/sync/value_sync.go` | `SyncUsers()` — matches users by email, builds PropertyValue objects, bulk upserts. Handles text, date, multiselect, and rank value types. |
-| `server/sync/kv_store_provider.go` | `KVStoreProvider` reads the JSON uploaded via the HTTP API out of the plugin KV store. Owns the KV key (`UserAttrsStoreKey`), the `StoredUserAttrs` value stored under it, and `ReadStoredUserAttrs`; gates work on the stored timestamp. |
+| `server/sync/document.go` | `ParseAttributesDocument()` decodes the uploaded bytes into the document's `users` records, rejecting anything that is not a JSON object or carries an unsupported `version`. The one parser shared by the upload handler and `KVStoreProvider`, so the two cannot disagree about what a valid document is. |
+| `server/sync/kv_store_provider.go` | `KVStoreProvider` reads the document uploaded via the HTTP API out of the plugin KV store. Owns the KV key (`AttributesStoreKey`), the `StoredAttributes` value stored under it, and `ReadStoredAttributes`; gates work on the stored timestamp. |
 | `server/main.go` | Plugin entry point (minimal). |
 | `server/manifest.go` | Auto-generated from plugin.json — do not edit manually. |
 
@@ -64,7 +65,7 @@ The webapp exists only to render the custom `Attributes` setting in the System C
 | File | Role |
 |------|------|
 | `webapp/src/index.tsx` | Plugin registration. `registerAdminConsoleCustomSetting('Attributes', UploadUserAttributes, {showTitle: true})` — the one hook this plugin uses. |
-| `webapp/src/components/upload_user_attributes.tsx` | The upload panel, mounted directly as the custom setting. Client-side validation (10 MB cap, must parse as a JSON array of objects), then upload/download/delete against the plugin HTTP API. Probes `/user_attributes/status` on mount to show whether a file is already stored and when it was uploaded. Takes `disabled` but deliberately not `setByEnv` — see Admin Console Setting below. |
+| `webapp/src/components/upload_user_attributes.tsx` | The upload panel, mounted directly as the custom setting. Client-side validation (10 MB cap, must parse as a JSON object carrying the supported `version`), then upload/download/delete against the plugin HTTP API. Probes `/attributes/status` on mount to show whether a document is already stored and when it was uploaded. Takes `disabled` but deliberately not `setByEnv` — see Admin Console Setting below. |
 | `webapp/src/components/confirm_modal.tsx` | Local `react-bootstrap` confirm dialog, used to gate deletion. |
 | `webapp/src/components/*.scss` | Styles for the above. `webapp/src/types/scss.d.ts` declares `*.scss` so TypeScript accepts the side-effect imports. |
 | `webapp/src/manifest.ts` | Auto-generated from plugin.json — do not edit manually. |
@@ -80,8 +81,8 @@ The webapp exists only to render the custom `Attributes` setting in the System C
 | `e2e/global-setup.ts` / `global-teardown.ts` | Log in once, save the admin storage state, enable the plugin; remove the state file afterwards. |
 | `e2e/pages/plugin_settings_page.ts` | The only page object. All locators for the plugin's settings section live here. |
 | `e2e/tests/settings.spec.ts` | The upload panel renders. |
-| `e2e/tests/user_attributes.spec.ts` | Upload/download/delete round trips, invalid-file rejection, delete-confirmation behaviour. |
-| `e2e/assets/` | Deliberately invalid fixtures. The valid fixture is the repo's own `data/user_attributes.json`. |
+| `e2e/tests/attributes.spec.ts` | Upload/download/delete round trips, invalid-document rejection, delete-confirmation behaviour. |
+| `e2e/assets/` | Deliberately invalid fixtures. The valid fixture is the repo's own `data/attributes.json`. |
 
 ### Build & Config
 
@@ -91,7 +92,7 @@ The webapp exists only to render the custom `Attributes` setting in the System C
 | `Makefile` | Build orchestration (~420 lines). All build/test/deploy commands. |
 | `build/setup.mk` | Extracts PLUGIN_ID, PLUGIN_VERSION, HAS_SERVER, HAS_WEBAPP from plugin.json. |
 | `build/pluginctl/` | Tool for local Mattermost deployment. |
-| `data/user_attributes.json` | Example data file with sample user records. |
+| `data/attributes.json` | Example attributes document with sample user records. |
 
 ## Field Definitions
 
@@ -129,11 +130,12 @@ Field types cannot be changed after creation (a Mattermost limitation), so chang
 - Failure handling is per-user and per-field: unknown fields, unsupported value types, format errors, missing users, and upsert failures all log and continue. `SyncUsers()` returns `nil` unless something structural goes wrong — a "successful" sync can have written nothing.
 - Timing comes from `nextWaitInterval()`, which schedules relative to `metadata.LastFinished` (0 on first run, so activation syncs immediately) and falls back to 60 minutes if the configured interval is < 1.
 - `cluster.Job` persists `LastFinished` in the plugin KV store under `cron_AttributeSync`, so it survives deactivation and redeployment. Two consequences: re-enabling the plugin syncs immediately only if the interval has already elapsed since the last run, and a sleeping job does not observe an interval change until it next wakes (`OnConfigurationChange` stores the config and nothing more). Nothing deletes that key on disable or on a forced upload — `DeleteAllKeysForPlugin` is only reachable from the plugin API itself.
-- **Uploading a file does not trigger a sync.** `handleUploadUserAttributes` only writes to the KV store; the next scheduled run picks it up. Doing better is a planned improvement (see README).
-- `KVStoreProvider`'s incremental behavior is timestamp-based: it compares the stored `lastUpdated` timestamp (written by the upload handler) against its own in-memory `lastTimestampSynced`, and returns an empty slice when the stored timestamp is no later. `lastTimestampSynced` is per-process and not persisted, so a plugin restart re-syncs the stored file once. It is set immediately after the read and *before* JSON parsing — deliberately, so a stored file that fails to parse is not retried on every tick.
-- **`KVStoreProvider` distinguishes "no data" from "no change", and only the second is an empty slice.** No data — nothing has ever been uploaded, or the last file was deleted — is an error, so it lands in the log via `runSync`'s `Failed to fetch changed users`. The reasoning is that sync has been pointed at a specific place, so finding nothing there is a misconfiguration rather than a steady state — a fresh install therefore logs an error every tick until it is given data.
-- One KV key, `UserAttrsStoreKey` (`user-attrs`), holds a `StoredUserAttrs` — the uploaded bytes and the timestamp that makes the provider notice them, written and deleted as one value. This is the reason no handler has to reconcile a file against a separate timestamp, and why the provider fetches the whole file on every tick even when it turns out to be unchanged. `ReadStoredUserAttrs` is the only reader: it decodes the raw value itself rather than letting `KV.Get` unmarshal in place, which would surface an unreachable store and a corrupt value as the same error. An unset key is neither — `KV.Get` returns no error and leaves the target untouched, so "nothing uploaded" is the `len(Data) == 0` case.
-- `pluginapi`'s `KV.Set` stores raw bytes only when handed a `[]byte` and JSON-encodes anything else, so the file is base64 inside the envelope — roughly a third larger in the database than on disk. `json.RawMessage` would avoid that, at the cost of `json.Marshal` compacting the JSON and so breaking the byte-for-byte download.
+- **Uploading a file does not trigger a sync.** `handleUploadAttributes` only writes to the KV store; the next scheduled run picks it up. Doing better is a planned improvement (see README).
+- `KVStoreProvider`'s incremental behavior is timestamp-based: it compares the stored `lastUpdated` timestamp (written by the upload handler) against its own in-memory `lastTimestampSynced`, and returns an empty slice when the stored timestamp is no later. `lastTimestampSynced` is per-process and not persisted, so a plugin restart re-syncs the stored document once. It is set immediately after the read and *before* JSON parsing — deliberately, so a stored document that fails to parse is not retried on every tick.
+- **`KVStoreProvider` distinguishes "no data" from "no change", and only the second is an empty slice.** No data — nothing has ever been uploaded, or the last document was deleted — is an error, so it lands in the log via `runSync`'s `Failed to fetch changed users`. The reasoning is that sync has been pointed at a specific place, so finding nothing there is a misconfiguration rather than a steady state — a fresh install therefore logs an error every tick until it is given data.
+- One KV key, `AttributesStoreKey` (`attributes`), holds a `StoredAttributes` — the uploaded bytes and the timestamp that makes the provider notice them, written and deleted as one value. This is the reason no handler has to reconcile a document against a separate timestamp, and why the provider fetches the whole document on every tick even when it turns out to be unchanged. `ReadStoredAttributes` is the only reader: it decodes the raw value itself rather than letting `KV.Get` unmarshal in place, which would surface an unreachable store and a corrupt value as the same error. An unset key is neither — `KV.Get` returns no error and leaves the target untouched, so "nothing uploaded" is the `len(Data) == 0` case.
+- `pluginapi`'s `KV.Set` stores raw bytes only when handed a `[]byte` and JSON-encodes anything else, so the document is base64 inside the envelope — roughly a third larger in the database than on disk. `json.RawMessage` would avoid that, at the cost of `json.Marshal` compacting the JSON and so breaking the byte-for-byte download.
+- **`ParseAttributesDocument` is the single place that decides what a valid document is**, shared by the upload handler and the sync path, so the two cannot drift into accepting different things. It only decodes `version` and `users` today; `encoding/json` ignores keys a struct does not name, and the stored bytes are the uploaded bytes verbatim, so a document already carrying `fields` or `channels` round-trips unchanged and survives until a later version of the parser reads them.
 
 ## HTTP API
 
@@ -141,16 +143,16 @@ Registered in `server/http_hooks.go` on a `gorilla/mux` router, served through t
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `POST` | `/user_attributes` | Upload the attributes file into the KV store. Body is the raw JSON file. |
-| `GET` | `/user_attributes` | Download the stored file verbatim. `404` when nothing is stored. |
-| `GET` | `/user_attributes/status` | `{"exists": bool, "lastUpdated": time\|null}` — lets the UI show whether a file is stored, and how current it is, without downloading it. A successful `POST` answers in the same shape, so the upload does not need a follow-up request. |
-| `DELETE` | `/user_attributes` | Remove the stored file. |
+| `POST` | `/attributes` | Upload the attributes document into the KV store. Body is the raw JSON document. |
+| `GET` | `/attributes` | Download the stored document verbatim. `404` when nothing is stored. |
+| `GET` | `/attributes/status` | `{"exists": bool, "lastUpdated": time\|null}` — lets the UI show whether a document is stored, and how current it is, without downloading it. A successful `POST` answers in the same shape, so the upload does not need a follow-up request. |
+| `DELETE` | `/attributes` | Remove the stored document. |
 
 Things to preserve when changing these:
 
 - **The sysadmin check is router middleware, not per-handler.** `initializeAPI` applies `requireSysadmin` via `router.Use`, so a route added later is protected by default rather than depending on the author remembering. It reads the `Mattermost-User-Id` header — the only header the plugin can trust, because the Mattermost server sets it on the way in and strips any client-supplied value — and requires `model.PermissionManageSystem`. Two consequences: the whole router is admin-only, so a genuinely public route needs the protected routes moved to a subrouter with `Use` applied there; and gorilla/mux builds the middleware chain only on a matched route (`Router.Match`), so unknown paths 404 without reaching the check.
 - **Uploads are bounded twice.** `http.MaxBytesReader` caps the body at `maxFileSizeBytes` (10 MB) server-side, and the UI checks `MAX_FILE_BYES` (also 10 MB) before sending. The two constants are independent — keep them in step.
-- **Validation is shape-only, on both sides, by design.** Server and client both require the payload to unmarshal as an array of objects; neither validates emails, field names, or value types. This is not a gap to close: external data routinely contains a few unusable records, and rejecting the whole file over one of them would mean syncing nothing. Per-record failures are already handled where they belong, in value sync, which logs and continues (see the failure-handling invariant above). Adding record-level validation to the upload endpoint would move that decision to the worst possible place — an all-or-nothing gate in front of otherwise good data.
+- **Validation is shape-only, on both sides, by design.** Server and client both require the payload to unmarshal as a document carrying the supported `version`; neither validates emails, field names, or value types. This is not a gap to close: external data routinely contains a few unusable records, and rejecting the whole document over one of them would mean syncing nothing. Per-record failures are already handled where they belong, in value sync, which logs and continues (see the failure-handling invariant above). Adding record-level validation to the upload endpoint would move that decision to the worst possible place — an all-or-nothing gate in front of otherwise good data.
 - The webapp reaches these routes with plain `fetch`, using `Client4.getOptions()` on `POST`/`DELETE` to pick up the CSRF token. `GET`s need no options.
 
 ## Admin Console Setting
@@ -244,7 +246,7 @@ cd e2e && npm test -- -g 'renders the upload panel'  # by title
   - `mattermost-redux` (and `@mattermost/client` beneath it) expose subpaths via the `exports` field. Jest 27 predates `exports` support, so `mattermost-redux/client` was unresolvable and *nothing* importing `Client4` could be tested. **Upgrading to jest 29 fixed this natively** — no `moduleNameMapper` needed, which is why the other plugins' configs have no entry for it. This is what jest 27 was costing.
   - `react-bootstrap` is a **webpack external** — the host webapp supplies it at runtime, so it is deliberately not installed and jest cannot resolve it. `tests/react_bootstrap_mock.tsx` stands in for it via `moduleNameMapper`, implementing only the `Modal` surface `confirm_modal.tsx` uses. Any future external in `webpack.config.js` that is not also a real dependency needs the same treatment.
   - **Installing react-bootstrap as a devDependency instead was tried and rejected**, and not for bundle-size reasons — `externals` excludes it by configuration, so an install would cost the bundle nothing. It was rejected because (a) Mattermost's webapp uses its own fork, `github:mattermost/react-bootstrap#05559f4c`, so an upstream install would test against a different library than production; and (b) upstream `0.32.4` — the line matching that fork and the pinned `@types/react-bootstrap@0.32.37` — declares `peer react: >=15.3.0`, which npm satisfies with react-dom 19 and then fails against react 17. `--legacy-peer-deps` does install it, but removes `react-dom` from the tree and breaks RTL; the alternative is an `overrides` pin, i.e. exactly the cruft removed with enzyme. The real Modal is covered in `e2e/` against the host's actual fork.
-- `upload_user_attributes.test.tsx` renders the **real** component tree, so the assertions are behavioural rather than prop-level. The mount-time `/user_attributes/status` request is stubbed with a `fetch` mock; `renderPanel` awaits an `act()` flush so the resulting state update does not land after the test ends.
+- `upload_user_attributes.test.tsx` renders the **real** component tree, so the assertions are behavioural rather than prop-level. The mount-time `/attributes/status` request is stubbed with a `fetch` mock; `renderPanel` awaits an `act()` flush so the resulting state update does not land after the test ends.
 - `react_fragment.test.tsx` was deleted: it asserted `React.version === '17.0.2'`, so it tested nothing about this plugin while guaranteeing a failure on any React upgrade. `manifest.test.tsx` is kept as a smoke test that manifest generation ran.
 
 **E2E tests** (`e2e/tests/*.spec.ts`):
