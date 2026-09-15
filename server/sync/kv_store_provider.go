@@ -89,11 +89,5 @@ func (f *KVStoreProvider) GetUserAttributes() ([]map[string]interface{}, error) 
 	// Update the sync after a successful read but before validation so we dont keep reading an invalid file
 	f.lastTimestampSynced = stored.LastUpdated
 
-	// Parse JSON
-	var users []map[string]interface{}
-	if err := json.Unmarshal(stored.Data, &users); err != nil {
-		return nil, fmt.Errorf("failed to parse JSON: %w", err)
-	}
-
-	return users, nil
+	return ParseAttributesDocument(stored.Data)
 }

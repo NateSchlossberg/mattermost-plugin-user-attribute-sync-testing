@@ -39,10 +39,10 @@ func TestKVStoreProvider_ReturnsStoredUsers(t *testing.T) {
 	provider, api := newTestKVStoreProvider(t)
 
 	// Fresh provider starts with a 0 lastSyncTime, so by setting lastUpdatedTime to now() should trigger a new run.
-	api.On("KVGet", UserAttrsStoreKey).Return(storedValue(t, time.Now(), []byte(`[
+	api.On("KVGet", UserAttrsStoreKey).Return(storedValue(t, time.Now(), []byte(`{"version": 2, "users": [
 		{"email": "user1@example.com", "job_title": "Engineer"},
 		{"email": "user2@example.com", "job_title": "Sales"}
-	]`)), nil).Once()
+	]}`)), nil).Once()
 
 	users, err := provider.GetUserAttributes()
 	require.NoError(t, err)
@@ -88,7 +88,7 @@ func TestKVStoreProvider_DoesNotProcessTwice(t *testing.T) {
 	// A fresh timestamp is picked up the first time. The second call reads the same value and
 	// returns nothing, because the timestamp has not moved.
 	api.On("KVGet", UserAttrsStoreKey).
-		Return(storedValue(t, time.Now(), []byte(`[{"email": "user1@example.com"}]`)), nil).Twice()
+		Return(storedValue(t, time.Now(), []byte(`{"version": 2, "users": [{"email": "user1@example.com"}]}`)), nil).Twice()
 
 	users, err := provider.GetUserAttributes()
 	require.NoError(t, err)
@@ -109,7 +109,7 @@ func TestKVStoreProvider_InvalidJSON(t *testing.T) {
 	users, err := provider.GetUserAttributes()
 	assert.Error(t, err)
 	assert.Nil(t, users)
-	assert.Contains(t, err.Error(), "failed to parse JSON")
+	assert.Contains(t, err.Error(), "not a valid attributes document")
 }
 
 // TestKVStoreProvider_FileStoreError tests error handling when the KV store is unreachable
