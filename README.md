@@ -40,15 +40,9 @@ The attributes appear in **System Console → User Attributes**, on user profile
 
    Or run `make` and upload `dist/*.tar.gz` through **System Console → Plugin Management**.
 
-2. Go to **System Console → Plugins → User Attribute Sync Test Tool** and set:
+2. Edit `data/attributes.json` to use the email addresses of users on your server, then go to **System Console → Plugins → User Attribute Sync Test Tool** and upload it with **Choose File** and **Upload**. The upload applies the document immediately — fields and values — and the panel shows what happened.
 
-   - **Sync Interval (Minutes)** to `1`, so uploads are picked up promptly
-
-   Click **Save**.
-
-3. Edit `data/attributes.json` to use the email addresses of users on your server, then upload it with **Choose File** and **Upload** in the same section.
-
-With nothing uploaded, activation does not create or delete attributes — a first install, or a restart after the stored file was deleted, must not tear down fields nobody asked to remove. After you upload, disable and re-enable the plugin so it applies the document's field list. Uploading a file does not trigger a sync, so the values appear on the next scheduled run — within a minute at the interval above.
+With nothing uploaded, activation does not create or delete attributes — a first install, or a restart after a reset, must not tear down fields nobody asked to remove. A redeploy with a document already stored reapplies it; there is nothing to configure and no need to disable the plugin.
 
 ## The data file
 
@@ -78,7 +72,7 @@ A JSON document with a `version`, a `fields.user` list, and a `users` array:
 
 `data/attributes.json` in this repository is an example of the format — the four attributes in **What it creates** live there, not in Go. Replace the email addresses with your own test users before uploading it. `version` must be `2` — an older upload in the bare-array format is rejected.
 
-The uploaded document is the full list of fields this plugin owns. A field it previously created that the document omits is deleted along with its values the next time field sync runs (plugin activation). Fields owned by an admin or another plugin are left alone. It is not the full list of values: a user the document does not mention keeps whatever they already have. Values disappear only when their field does.
+The uploaded document is the full list of fields this plugin owns. A field it previously created that the document omits is deleted along with its values when the document is applied. Fields owned by an admin or another plugin are left alone. It is not the full list of values: a user the document does not mention keeps whatever they already have. Values disappear only when their field does.
 
 `visibility`, `access_mode`, `permission_field`, `permission_values`, and `permission_options` are optional. If omitted they default to visibility `always`, access mode `public`, and permission levels `sysadmin`. Accepted values:
 
@@ -100,7 +94,7 @@ The plugin reads the attributes file from its key-value store, populated by uplo
 
 ### Managing the uploaded file
 
-The settings section shows a panel for the stored file. It reports whether a file is present and when it was uploaded, and lets you replace, download, or delete it. Downloading returns the exact bytes that were uploaded, which is the quickest way to confirm what the plugin is working from. Deleting asks for confirmation.
+The settings section shows a panel for the stored file. It reports whether a file is present and when it was uploaded, and lets you replace, download, or delete it. Downloading returns the exact bytes that were uploaded, which is the quickest way to confirm what the plugin is working from. After an upload or a delete, the panel lists how many fields were created, updated, deleted, and skipped, and how many users and channels were synced or skipped. Deleting asks for confirmation: it removes the stored document and every attribute this plugin created, along with the values on user profiles.
 
 These buttons act immediately and do not go through the console's **Save** button.
 
@@ -112,10 +106,10 @@ The upload panel is a client for four endpoints, which are useful for seeding a 
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `POST` | `/attributes` | Store a document. The body is the raw JSON. |
+| `POST` | `/attributes` | Store a document and sync it. The body is the raw JSON. `201` answers with the sync summary (`fieldsCreated`, `fieldsUpdated`, `fieldsDeleted`, `fieldsSkipped`, `usersSynced`, `usersSkipped`, `channelsSynced`, `channelsSkipped`). If the document is stored but the sync fails, `500`. |
 | `GET` | `/attributes` | Download the stored document. |
 | `GET` | `/attributes/status` | `{"exists": bool, "lastUpdated": time\|null}` |
-| `DELETE` | `/attributes` | Remove the stored document. |
+| `DELETE` | `/attributes` | Remove the stored document and every field this plugin owns (values first). `200` answers with the same summary shape; field-delete counts are filled in, the rest stay `0`. |
 
 Full paths are prefixed with `/plugins/com.mattermost.user-attribute-sync-test-tool`.
 
@@ -128,17 +122,13 @@ curl -X POST \
 
 ## How syncing works
 
-If a document is stored, the plugin applies its `fields.user` list when it activates: create, update, or delete this plugin's fields. With no document stored, activation skips field sync entirely. Value sync runs on a background job: immediately on the very first run, then every **Sync Interval (Minutes)** after the previous run finished. The default is 60 minutes and the minimum is 1.
+An upload stores the document and then applies it: fields from `fields.user`, then per-user values. The HTTP response is the summary the System Console panel shows, so you do not have to read the plugin log to see what happened. Two uploads (or an upload and an activation) cannot interleave — they wait on one lock.
 
-The plugin compares the timestamp written when you uploaded against the timestamp of the last sync; when nothing has changed, the sync does no work.
+If a document is already stored, activation reapplies it the same way. With no document stored, activation does nothing — it cannot delete fields.
 
-Uploading a file does not itself trigger a sync. The next scheduled run picks it up.
+`DELETE /attributes` is a reset, not just a file removal: the stored document goes first, then every field this plugin owns (and their values). A restart after that leaves attributes alone, because nothing is stored. The confirmation modal in the console gates it.
 
-To sync without waiting, disable and re-enable the plugin. That rebuilds the job, which evaluates the schedule as soon as it starts and runs the sync if the interval has already elapsed since the last run. Note that the last-run time is stored in the plugin's key-value store and survives a restart, so re-enabling part-way through a long interval waits out the remainder — lower the interval first if you are in that position.
-
-Keeping the interval at 1 while you load data avoids the question entirely.
-
-Progress and per-user problems go to the server log:
+Per-user and per-field problems still go to the server log:
 
 ```bash
 make logs-watch
@@ -160,7 +150,7 @@ Access mode is separate from `visibility`, which only controls whether values ar
 
 ## Changing which attributes it creates
 
-Attribute definitions live in `fields.user` in the uploaded document. Edit `data/attributes.json` (or whatever you upload), then upload it and disable and re-enable the plugin so field sync runs.
+Attribute definitions live in `fields.user` in the uploaded document. Edit `data/attributes.json` (or whatever you upload), then upload it.
 
 ### Add an attribute
 
@@ -192,7 +182,7 @@ Attribute definitions live in `fields.user` in the uploaded document. Edit `data
 }
 ```
 
-Mattermost generates an ID for each option and stores values as those IDs. The plugin reads the IDs back and translates names from the data file when it writes values. An option dropped from a field's `options` list is removed from the field on the next field sync, and any stored value pointing at it is left pointing at an option ID that no longer exists — silently, with nothing logged.
+Mattermost generates an ID for each option and stores values as those IDs. The plugin reads the IDs back and translates names from the data file when it writes values. An option dropped from a field's `options` list is removed from the field when the document is applied, and any stored value pointing at it is left pointing at an option ID that no longer exists — silently, with nothing logged.
 
 ### Add a rank attribute
 
@@ -217,7 +207,7 @@ The ordering is what lets a policy express a threshold with `is at least` instea
 
 ### Attribute types cannot change
 
-Mattermost does not allow an attribute's type to change after it is created. To change one, upload a document that omits the field — which deletes it and its values on the next field sync — then upload again with the new type.
+Mattermost does not allow an attribute's type to change after it is created. To change one, upload a document that omits the field — which deletes it and its values — then upload again with the new type.
 
 ## Troubleshooting
 
@@ -229,14 +219,8 @@ Mattermost does not allow an attribute's type to change after it is created. To 
 
 ## Limitations
 
-- Uploading a file does not trigger a sync; it happens on the next scheduled run.
 - Users are matched by email address only.
 - When a file changes, every record in it is synced again. There is no per-record diffing.
-
-## Planned improvements
-
-- Trigger a sync when a file is uploaded, instead of waiting for the next scheduled run.
-- Drop the scheduled job entirely, since an upload is the only thing that can change the data.
 
 ## Development
 
@@ -246,12 +230,13 @@ Mattermost does not allow an attribute's type to change after it is created. To 
 │   ├── sync/
 │   │   ├── field_sync.go         # Schema reconciliation from the uploaded document
 │   │   ├── value_sync.go         # Writing per-user values
+│   │   ├── sync.go               # SyncDocument: fields then values, returning the summary
 │   │   ├── document.go           # Parses the uploaded document, shared by upload and sync
-│   │   └── kv_store_provider.go  # Reads the uploaded document from the key-value store
-│   ├── plugin.go                 # OnActivate / OnDeactivate
-│   ├── configuration.go          # Settings
+│   │   └── kv_store_provider.go  # Stored document in the key-value store
+│   ├── plugin.go                 # OnActivate
+│   ├── configuration.go          # Empty plugin configuration
 │   ├── http_hooks.go             # The /attributes endpoints
-│   └── job.go                    # Background sync job
+│   └── job.go                    # runSync: read stored document, SyncDocument, under a lock
 ├── webapp/src/
 │   ├── index.tsx                 # Registers the custom admin console setting
 │   └── components/
