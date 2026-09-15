@@ -23,6 +23,15 @@ type ChosenFile = {
     recordCount: number;
 }
 
+// The only shape checked client-side: an object with the supported version, plus whatever users
+// carries. Field and channel contents are not read here since nothing on this screen uses them.
+type ParsedDocument = {
+    version: number;
+    users?: unknown[];
+}
+
+const SUPPORTED_DOCUMENT_VERSION = 2;
+
 type FileStatus = {
     exists: boolean;
     lastUpdated: string | null;
@@ -106,16 +115,20 @@ export default function UploadUserAttributes({id, disabled = false}: Props) {
             }
             const text = await newFile.text();
 
-            // The same shape check the server does: an array of objects, one per user. Contents
-            // are not validated here — the server does not either, and unrecognized fields or
-            // unmatched emails surface as warnings in the plugin logs during the next sync.
+            // The same shape check the server does: a JSON object carrying the supported version.
+            // Record, field and channel contents are not validated here — the server does not
+            // either, and unrecognized fields or unmatched emails surface as warnings in the
+            // plugin logs during the next sync.
             const parsed: unknown = JSON.parse(text);
-            if (!Array.isArray(parsed) || parsed.length === 0 ||
-                parsed.some((r) => typeof r !== 'object' || r === null || Array.isArray(r))) {
-                throw new Error('File must be a JSON array of objects');
+            if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+                throw new Error('File must be a JSON object');
+            }
+            const doc = parsed as ParsedDocument;
+            if (doc.version !== SUPPORTED_DOCUMENT_VERSION) {
+                throw new Error(`Unsupported document version: only version ${SUPPORTED_DOCUMENT_VERSION} is supported`);
             }
 
-            setPendingFile({file: newFile, recordCount: parsed.length});
+            setPendingFile({file: newFile, recordCount: doc.users?.length ?? 0});
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Could not read file');
 
@@ -139,7 +152,7 @@ export default function UploadUserAttributes({id, disabled = false}: Props) {
 
         try {
             const response = await fetch(
-                Client4.getAbsoluteUrl(`/plugins/${manifest.id}/user_attributes`),
+                Client4.getAbsoluteUrl(`/plugins/${manifest.id}/attributes`),
                 Client4.getOptions({method: 'POST', body: pendingFile.file}), //getOptions() provides CSRF Token for POST
             );
 
@@ -167,7 +180,7 @@ export default function UploadUserAttributes({id, disabled = false}: Props) {
         setError(null);
 
         try {
-            const response = await fetch(Client4.getAbsoluteUrl(`/plugins/${manifest.id}/user_attributes`));
+            const response = await fetch(Client4.getAbsoluteUrl(`/plugins/${manifest.id}/attributes`));
 
             if (!response.ok) {
                 throw new Error(`Download failed (${response.status})`);
@@ -180,7 +193,7 @@ export default function UploadUserAttributes({id, disabled = false}: Props) {
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = 'user_attributes.json';
+            a.download = 'attributes.json';
             a.click();
             URL.revokeObjectURL(url);
         } catch (err) {
@@ -200,7 +213,7 @@ export default function UploadUserAttributes({id, disabled = false}: Props) {
 
         try {
             const response = await fetch(
-                Client4.getAbsoluteUrl(`/plugins/${manifest.id}/user_attributes`),
+                Client4.getAbsoluteUrl(`/plugins/${manifest.id}/attributes`),
                 Client4.getOptions({method: 'DELETE'}),
             );
 
@@ -221,7 +234,7 @@ export default function UploadUserAttributes({id, disabled = false}: Props) {
         // this is only called on mount, with status state initialized to 'init' above.
         // if that changes this should get its own status similar to the other calls.
         try {
-            const response = await fetch(Client4.getAbsoluteUrl(`/plugins/${manifest.id}/user_attributes/status`));
+            const response = await fetch(Client4.getAbsoluteUrl(`/plugins/${manifest.id}/attributes/status`));
             const body = await response.json().catch(() => ({}));
             if (!response.ok) {
                 throw new Error(body.error ?? `File status check failed (${response.status})`);
@@ -299,8 +312,8 @@ export default function UploadUserAttributes({id, disabled = false}: Props) {
 
             <ConfirmModal
                 show={showDeleteConfirm}
-                title={'Delete stored user attributes file?'}
-                message={'The uploaded file will be removed from the server and the plugin will have nothing to sync. Attribute values already written to user profiles will remain. This cannot be undone.'}
+                title={'Delete stored attributes document?'}
+                message={'The uploaded document will be removed from the server and the plugin will have nothing to sync. Attribute values already written to user profiles will remain. This cannot be undone.'}
                 confirmButtonText={'Delete'}
                 isConfirmDisabled={disabled}
                 onConfirm={handleDelete}

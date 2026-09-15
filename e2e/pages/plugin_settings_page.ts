@@ -43,7 +43,7 @@ export default class PluginSettingsPage {
     // Located by its accessible name, which comes from the aria-labelledby heading in
     // confirm_modal.tsx. Changing that title text means changing it here.
     confirmDeleteDialog() {
-        return this.page.getByRole('dialog', {name: 'Delete stored user attributes file?'});
+        return this.page.getByRole('dialog', {name: 'Delete stored attributes document?'});
     }
 
     confirmDeleteButton() {
