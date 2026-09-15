@@ -169,4 +169,86 @@ func TestSyncDocument(t *testing.T) {
 		assert.Equal(t, 1, summary.FieldsCreated)
 		assert.Equal(t, 1, summary.FieldsDeleted)
 	})
+
+	t.Run("creates channel fields with an Enterprise Advanced license", func(t *testing.T) {
+		client, api := newTestSyncClient(t)
+
+		api.On("GetLicense").Return(&model.License{SkuShortName: model.LicenseShortSkuEnterpriseAdvanced})
+		mockEmptyFieldSearch(api, groupID)
+		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
+			return f.Name == "department" &&
+				f.ObjectType == model.PropertyFieldObjectTypeChannel &&
+				f.TargetType == string(model.PropertyFieldTargetLevelSystem)
+		})).Return(&model.PropertyField{ID: "generated_channel_id", Name: "department", Type: model.PropertyFieldTypeText}, nil)
+
+		doc := AttributesDocument{
+			Version: SupportedDocumentVersion,
+			Fields: FieldSchema{
+				Channel: []FieldDefinition{{
+					Name:        "department",
+					DisplayName: "Department",
+					Type:        model.PropertyFieldTypeText,
+				}},
+			},
+		}
+
+		summary, err := SyncDocument(client, groupID, pluginID, doc)
+		require.NoError(t, err)
+		assert.Equal(t, 1, summary.FieldsCreated)
+		assert.Equal(t, 0, summary.FieldsSkipped)
+	})
+
+	t.Run("skips channel fields below Enterprise Advanced", func(t *testing.T) {
+		licenses := map[string]*model.License{
+			"no license": nil,
+			"enterprise": {SkuShortName: model.LicenseShortSkuEnterprise},
+		}
+		for name, license := range licenses {
+			t.Run(name, func(t *testing.T) {
+				client, api := newTestSyncClient(t)
+
+				api.On("GetLicense").Return(license)
+				api.On("SearchPropertyFields", groupID, mock.MatchedBy(func(opts model.PropertyFieldSearchOpts) bool {
+					return len(opts.ObjectTypes) == 1 && opts.ObjectTypes[0] == model.PropertyFieldObjectTypeUser
+				})).Return([]*model.PropertyField{}, nil)
+				// A channel field a licensed run created survives a downgrade:
+				// the keep-set comes from the document, not from what synced.
+				existingChannelField := &model.PropertyField{
+					ID:         model.NewId(),
+					Name:       "department",
+					ObjectType: model.PropertyFieldObjectTypeChannel,
+					CreateAt:   1,
+					Attrs:      model.StringInterface{model.PropertyAttrsSourcePluginID: pluginID},
+				}
+				api.On("SearchPropertyFields", groupID, mock.MatchedBy(func(opts model.PropertyFieldSearchOpts) bool {
+					return len(opts.ObjectTypes) == 0
+				})).Return([]*model.PropertyField{existingChannelField}, nil)
+				api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
+					return f.Name == "job_title"
+				})).Return(&model.PropertyField{ID: "generated_id_1", Name: "job_title", Type: model.PropertyFieldTypeText}, nil)
+
+				doc := AttributesDocument{
+					Version: SupportedDocumentVersion,
+					Fields: FieldSchema{
+						User: []FieldDefinition{{
+							Name:        "job_title",
+							DisplayName: "Job Title",
+							Type:        model.PropertyFieldTypeText,
+						}},
+						Channel: []FieldDefinition{{
+							Name:        "department",
+							DisplayName: "Department",
+							Type:        model.PropertyFieldTypeText,
+						}},
+					},
+				}
+
+				summary, err := SyncDocument(client, groupID, pluginID, doc)
+				require.NoError(t, err)
+				assert.Equal(t, 1, summary.FieldsCreated)
+				assert.Equal(t, 1, summary.FieldsSkipped)
+				assert.Equal(t, 0, summary.FieldsDeleted)
+			})
+		}
+	})
 }
