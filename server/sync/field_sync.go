@@ -411,7 +411,6 @@ func SyncFields(client *pluginapi.Client, groupID, pluginID string, defs []Field
 	var failedFields []string
 
 	for _, def := range defs {
-		cache.FieldNameToType[def.Name] = def.Type
 		_, err := syncSingleField(client, groupID, pluginID, def, cache)
 		if err != nil {
 			client.Log.Error("Failed to sync field",
@@ -421,6 +420,7 @@ func SyncFields(client *pluginapi.Client, groupID, pluginID string, defs []Field
 			// Continue with next field for graceful degradation
 			continue
 		}
+		cache.FieldNameToType[def.Name] = def.Type
 	}
 
 	if len(failedFields) > 0 {

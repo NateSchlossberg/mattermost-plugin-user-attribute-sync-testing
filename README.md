@@ -192,7 +192,7 @@ Attribute definitions live in `fields.user` in the uploaded document. Edit `data
 }
 ```
 
-Mattermost generates an ID for each option and stores values as those IDs. The plugin reads the IDs back and translates names from the data file when it writes values.
+Mattermost generates an ID for each option and stores values as those IDs. The plugin reads the IDs back and translates names from the data file when it writes values. An option dropped from a field's `options` list is removed from the field on the next field sync, and any stored value pointing at it is left pointing at an option ID that no longer exists — silently, with nothing logged.
 
 ### Add a rank attribute
 
