@@ -31,9 +31,8 @@ func (p *Plugin) ServeHTTP(c *plugin.Context, w http.ResponseWriter, r *http.Req
 // initializeAPI builds the plugin's HTTP router. It must be called before any request can be
 // served, so OnActivate calls it first.
 //
-// These endpoints let an admin manage the attributes file directly through the System Console
-// rather than installing a file on the server's filesystem, which is what KVStoreProvider reads.
-// They are only useful with that provider selected; FileProvider ignores the KV store entirely.
+// These endpoints let an admin upload the attributes document directly through the System
+// Console into the plugin KV store, which KVStoreProvider reads.
 //
 // Every route is behind requireSysadmin, applied once here as middleware rather than repeated in
 // each handler, so a route added later cannot accidentally be left unauthenticated. Note this

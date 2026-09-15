@@ -66,9 +66,8 @@ func TestKVStoreProvider_NoStoredFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "no attributes document in the KV store")
 }
 
-// TestKVStoreProvider_NothingStored tests that an unset key is an error, matching how FileProvider
-// treats a missing file. Sync is pointed at this store, so finding nothing in it is a
-// misconfiguration to surface rather than silently accept.
+// TestKVStoreProvider_NothingStored tests that an unset key is an error. Sync is pointed at this
+// store, so finding nothing in it is a misconfiguration to surface rather than silently accept.
 func TestKVStoreProvider_NothingStored(t *testing.T) {
 	provider, api := newTestKVStoreProvider(t)
 
