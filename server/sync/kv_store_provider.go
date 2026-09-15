@@ -8,34 +8,34 @@ import (
 	"github.com/mattermost/mattermost/server/public/pluginapi"
 )
 
-// UserAttrsStoreKey holds what the HTTP handlers in server/http_hooks.go uploaded: the file, and
+// AttributesStoreKey holds what the HTTP handlers in server/http_hooks.go uploaded: the file, and
 // the timestamp that tells this provider the file is new.
-const UserAttrsStoreKey = "user-attrs"
+const AttributesStoreKey = "attributes"
 
-// StoredUserAttrs is the value under UserAttrsStoreKey.
+// StoredAttributes is the value under AttributesStoreKey.
 //
 // Data is the file exactly as it was uploaded, so a download returns what the admin gave us.
-type StoredUserAttrs struct {
+type StoredAttributes struct {
 	LastUpdated time.Time `json:"lastUpdated"`
 	Data        []byte    `json:"data"`
 }
 
-// ReadStoredUserAttrs reads the stored file and its timestamp.
-func ReadStoredUserAttrs(client *pluginapi.Client) (StoredUserAttrs, error) {
+// ReadStoredAttributes reads the stored file and its timestamp.
+func ReadStoredAttributes(client *pluginapi.Client) (StoredAttributes, error) {
 	// Unmarshal here rather than letting KV.Get do it, so an unreachable store and a corrupt value
 	// are not reported as the same error.
 	var raw []byte
-	if err := client.KV.Get(UserAttrsStoreKey, &raw); err != nil {
-		return StoredUserAttrs{}, fmt.Errorf("failed to read %s from the KV store: %w", UserAttrsStoreKey, err)
+	if err := client.KV.Get(AttributesStoreKey, &raw); err != nil {
+		return StoredAttributes{}, fmt.Errorf("failed to read %s from the KV store: %w", AttributesStoreKey, err)
 	}
 
 	if len(raw) == 0 {
-		return StoredUserAttrs{}, nil
+		return StoredAttributes{}, nil
 	}
 
-	var stored StoredUserAttrs
+	var stored StoredAttributes
 	if err := json.Unmarshal(raw, &stored); err != nil {
-		return StoredUserAttrs{}, fmt.Errorf("malformed data in %s: %w", UserAttrsStoreKey, err)
+		return StoredAttributes{}, fmt.Errorf("malformed data in %s: %w", AttributesStoreKey, err)
 	}
 
 	return stored, nil
@@ -70,14 +70,14 @@ func (f *KVStoreProvider) GetUserAttributes() ([]map[string]interface{}, error) 
 	// One read gets the file and the timestamp together, so the file is fetched even when it turns
 	// out to be unchanged. Keeping it all in one key keeps key management simple; to support very
 	// large files read frequently, this can be broken out into separate keys if necessary.
-	stored, err := ReadStoredUserAttrs(f.client)
+	stored, err := ReadStoredAttributes(f.client)
 	if err != nil {
 		return nil, err
 	}
 
 	// No file has ever been uploaded, or the last one was deleted
 	if len(stored.Data) == 0 {
-		return nil, fmt.Errorf("no user attributes file in the KV store: %s is unset — upload one from the System Console", UserAttrsStoreKey)
+		return nil, fmt.Errorf("no attributes document in the KV store: %s is unset — upload one from the System Console", AttributesStoreKey)
 	}
 
 	// Nothing new since the last read, so there is no work to do

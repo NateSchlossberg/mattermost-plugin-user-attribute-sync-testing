@@ -23,12 +23,12 @@ func newTestKVStoreProvider(t *testing.T) (*KVStoreProvider, *plugintest.API) {
 	return NewKVStoreProvider(pluginapi.NewClient(api, &plugintest.Driver{})), api
 }
 
-// storedValue encodes a StoredUserAttrs the way the upload handler does, so a KVGet mock returns
+// storedValue encodes a StoredAttributes the way the upload handler does, so a KVGet mock returns
 // what the provider would really find.
 func storedValue(t *testing.T, lastUpdated time.Time, data []byte) []byte {
 	t.Helper()
 
-	value, err := json.Marshal(StoredUserAttrs{LastUpdated: lastUpdated, Data: data})
+	value, err := json.Marshal(StoredAttributes{LastUpdated: lastUpdated, Data: data})
 	require.NoError(t, err)
 
 	return value
@@ -39,7 +39,7 @@ func TestKVStoreProvider_ReturnsStoredUsers(t *testing.T) {
 	provider, api := newTestKVStoreProvider(t)
 
 	// Fresh provider starts with a 0 lastSyncTime, so by setting lastUpdatedTime to now() should trigger a new run.
-	api.On("KVGet", UserAttrsStoreKey).Return(storedValue(t, time.Now(), []byte(`{"version": 2, "users": [
+	api.On("KVGet", AttributesStoreKey).Return(storedValue(t, time.Now(), []byte(`{"version": 2, "users": [
 		{"email": "user1@example.com", "job_title": "Engineer"},
 		{"email": "user2@example.com", "job_title": "Sales"}
 	]}`)), nil).Once()
@@ -58,12 +58,12 @@ func TestKVStoreProvider_ReturnsStoredUsers(t *testing.T) {
 func TestKVStoreProvider_NoStoredFile(t *testing.T) {
 	provider, api := newTestKVStoreProvider(t)
 
-	api.On("KVGet", UserAttrsStoreKey).Return(storedValue(t, time.Now(), nil), nil).Once()
+	api.On("KVGet", AttributesStoreKey).Return(storedValue(t, time.Now(), nil), nil).Once()
 
 	users, err := provider.GetUserAttributes()
 	assert.Error(t, err)
 	assert.Nil(t, users)
-	assert.Contains(t, err.Error(), "no user attributes file in the KV store")
+	assert.Contains(t, err.Error(), "no attributes document in the KV store")
 }
 
 // TestKVStoreProvider_NothingStored tests that an unset key is an error, matching how FileProvider
@@ -72,12 +72,12 @@ func TestKVStoreProvider_NoStoredFile(t *testing.T) {
 func TestKVStoreProvider_NothingStored(t *testing.T) {
 	provider, api := newTestKVStoreProvider(t)
 
-	api.On("KVGet", UserAttrsStoreKey).Return(nil, nil).Once()
+	api.On("KVGet", AttributesStoreKey).Return(nil, nil).Once()
 
 	users, err := provider.GetUserAttributes()
 	assert.Error(t, err)
 	assert.Nil(t, users)
-	assert.Contains(t, err.Error(), "no user attributes file in the KV store")
+	assert.Contains(t, err.Error(), "no attributes document in the KV store")
 }
 
 // TestKVStoreProvider_RDoesNotProcessTwice documents that this provider is relies on
@@ -87,7 +87,7 @@ func TestKVStoreProvider_DoesNotProcessTwice(t *testing.T) {
 
 	// A fresh timestamp is picked up the first time. The second call reads the same value and
 	// returns nothing, because the timestamp has not moved.
-	api.On("KVGet", UserAttrsStoreKey).
+	api.On("KVGet", AttributesStoreKey).
 		Return(storedValue(t, time.Now(), []byte(`{"version": 2, "users": [{"email": "user1@example.com"}]}`)), nil).Twice()
 
 	users, err := provider.GetUserAttributes()
@@ -103,7 +103,7 @@ func TestKVStoreProvider_DoesNotProcessTwice(t *testing.T) {
 func TestKVStoreProvider_InvalidJSON(t *testing.T) {
 	provider, api := newTestKVStoreProvider(t)
 
-	api.On("KVGet", UserAttrsStoreKey).
+	api.On("KVGet", AttributesStoreKey).
 		Return(storedValue(t, time.Now(), []byte("{invalid json content")), nil).Once()
 
 	users, err := provider.GetUserAttributes()
@@ -116,13 +116,13 @@ func TestKVStoreProvider_InvalidJSON(t *testing.T) {
 func TestKVStoreProvider_FileStoreError(t *testing.T) {
 	provider, api := newTestKVStoreProvider(t)
 
-	api.On("KVGet", UserAttrsStoreKey).
+	api.On("KVGet", AttributesStoreKey).
 		Return(nil, model.NewAppError("KVGet", "kv.get.app_error", nil, "connection refused", http.StatusInternalServerError)).Once()
 
 	users, err := provider.GetUserAttributes()
 	assert.Error(t, err)
 	assert.Nil(t, users)
-	assert.Contains(t, err.Error(), "failed to read user-attrs from the KV store")
+	assert.Contains(t, err.Error(), "failed to read attributes from the KV store")
 }
 
 // TestKVStoreProvider_MalformedStoredValue tests error handling for a stored value that is not the
@@ -130,7 +130,7 @@ func TestKVStoreProvider_FileStoreError(t *testing.T) {
 func TestKVStoreProvider_MalformedStoredValue(t *testing.T) {
 	provider, api := newTestKVStoreProvider(t)
 
-	api.On("KVGet", UserAttrsStoreKey).Return([]byte(`malformed`), nil).Once()
+	api.On("KVGet", AttributesStoreKey).Return([]byte(`malformed`), nil).Once()
 
 	users, err := provider.GetUserAttributes()
 	assert.Error(t, err)

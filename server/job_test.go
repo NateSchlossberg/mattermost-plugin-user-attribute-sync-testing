@@ -34,7 +34,7 @@ func TestRunSync(t *testing.T) {
 
 	t.Run("no stored document", func(t *testing.T) {
 		p, api := newPlugin(t)
-		api.On("KVGet", sync.UserAttrsStoreKey).Return(nil, nil).Once()
+		api.On("KVGet", sync.AttributesStoreKey).Return(nil, nil).Once()
 
 		p.runSync()
 
@@ -44,8 +44,8 @@ func TestRunSync(t *testing.T) {
 
 	t.Run("a stored document", func(t *testing.T) {
 		p, api := newPlugin(t)
-		api.On("KVGet", sync.UserAttrsStoreKey).
-			Return(storedValue(t, time.Now(), []byte(`[{"email":"nobody@example.com"}]`)), nil).Once()
+		api.On("KVGet", sync.AttributesStoreKey).
+			Return(storedValue(t, time.Now(), []byte(`{"version": 2, "users": [{"email":"nobody@example.com"}]}`)), nil).Once()
 
 		notFoundErr := model.NewAppError("GetUserByEmail", "app.user.get_by_email.app_error", nil, "", 404)
 		api.On("GetUserByEmail", "nobody@example.com").Return(nil, notFoundErr).Once()

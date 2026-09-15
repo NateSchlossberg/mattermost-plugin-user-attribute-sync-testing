@@ -44,22 +44,22 @@ func (p *Plugin) initializeAPI() {
 	router := mux.NewRouter()
 	router.Use(p.requireSysadmin)
 
-	router.HandleFunc("/user_attributes", p.handleUploadUserAttributes).Methods("POST")
-	router.HandleFunc("/user_attributes", p.handleDownloadUserAttributes).Methods("GET")
-	router.HandleFunc("/user_attributes/status", p.handleUserAttributesStatus).Methods("GET")
-	router.HandleFunc("/user_attributes", p.handleDeleteUserAttributes).Methods("DELETE")
+	router.HandleFunc("/attributes", p.handleUploadAttributes).Methods("POST")
+	router.HandleFunc("/attributes", p.handleDownloadAttributes).Methods("GET")
+	router.HandleFunc("/attributes/status", p.handleAttributesStatus).Methods("GET")
+	router.HandleFunc("/attributes", p.handleDeleteAttributes).Methods("DELETE")
 
 	p.router = router
 }
 
-type userAttributesStatus struct {
+type attributesStatus struct {
 	Exists      bool       `json:"exists"`
 	LastUpdated *time.Time `json:"lastUpdated"`
 }
 
-// handleUploadUserAttributes stores an uploaded attributes file in the KV store, where
+// handleUploadAttributes stores an uploaded attributes document in the KV store, where
 // KVStoreProvider will find it on the next sync.
-func (p *Plugin) handleUploadUserAttributes(w http.ResponseWriter, r *http.Request) {
+func (p *Plugin) handleUploadAttributes(w http.ResponseWriter, r *http.Request) {
 	// Cap the body before reading it, so an oversized upload cannot exhaust memory
 	r.Body = http.MaxBytesReader(w, r.Body, maxFileSizeBytes)
 	raw, err := io.ReadAll(r.Body)
@@ -74,17 +74,16 @@ func (p *Plugin) handleUploadUserAttributes(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Validate the shape only: the payload has to be an array of objects, matching what
-	// AttributeProvider returns.
+	// Validate the shape only, using the same parser the sync path uses, so the two cannot
+	// disagree about what is acceptable.
 	//
-	// Individual records are deliberately not checked here. Rejecting an entire file because one
-	// record is bad is the wrong trade-off — data pulled from an external system routinely has a
-	// few unusable records, and refusing all of it means syncing nothing. Value sync already
+	// Individual records are deliberately not checked here. Rejecting an entire document because
+	// one record is bad is the wrong trade-off — data pulled from an external system routinely has
+	// a few unusable records, and refusing all of it means syncing nothing. Value sync already
 	// handles them one at a time: unknown fields, unsupported types, unmatched emails and failed
 	// writes each log a warning and move on to the next record.
-	var userAttrs []map[string]interface{}
-	if err = json.Unmarshal(raw, &userAttrs); err != nil || userAttrs == nil || len(userAttrs) == 0 {
-		p.errorWithJSON(w, http.StatusBadRequest, "invalid json - must be array of objects")
+	if _, err = sync.ParseAttributesDocument(raw); err != nil {
+		p.errorWithJSON(w, http.StatusBadRequest, fmt.Sprintf("invalid attributes document: %s", err))
 		return
 	}
 
@@ -93,9 +92,9 @@ func (p *Plugin) handleUploadUserAttributes(w http.ResponseWriter, r *http.Reque
 	// Note KV.Set reports failure two ways: an error, or set == false meaning the write did not
 	// happen.
 	uploadedAt := time.Now()
-	set, err := p.client.KV.Set(sync.UserAttrsStoreKey, sync.StoredUserAttrs{LastUpdated: uploadedAt, Data: raw})
+	set, err := p.client.KV.Set(sync.AttributesStoreKey, sync.StoredAttributes{LastUpdated: uploadedAt, Data: raw})
 	if err != nil {
-		p.client.Log.Error("failed to upload userAttrs file", "err", err)
+		p.client.Log.Error("failed to upload attributes document", "err", err)
 		p.errorWithJSON(w, http.StatusInternalServerError, "failed to upload file")
 		return
 	} else if !set {
@@ -105,16 +104,16 @@ func (p *Plugin) handleUploadUserAttributes(w http.ResponseWriter, r *http.Reque
 
 	// Acknowledge with the resulting state, in the same shape the status endpoint uses, so the
 	// webapp can show the new timestamp without asking for it again.
-	p.responseWithJSON(w, http.StatusCreated, userAttributesStatus{Exists: true, LastUpdated: &uploadedAt})
+	p.responseWithJSON(w, http.StatusCreated, attributesStatus{Exists: true, LastUpdated: &uploadedAt})
 }
 
-// handleDownloadUserAttributes returns the stored attributes file verbatim, so an admin can see
+// handleDownloadAttributes returns the stored attributes document verbatim, so an admin can see
 // exactly what the plugin is syncing. This is the one handler that does not respond with the JSON
 // envelope, because the body is the file itself.
-func (p *Plugin) handleDownloadUserAttributes(w http.ResponseWriter, r *http.Request) {
-	stored, err := sync.ReadStoredUserAttrs(p.client)
+func (p *Plugin) handleDownloadAttributes(w http.ResponseWriter, r *http.Request) {
+	stored, err := sync.ReadStoredAttributes(p.client)
 	if err != nil {
-		p.client.Log.Error("failed to retrieve userAttrs", "err", err)
+		p.client.Log.Error("failed to retrieve attributes document", "err", err)
 		p.errorWithJSON(w, http.StatusInternalServerError, "failed to download file")
 		return
 	}
@@ -131,14 +130,14 @@ func (p *Plugin) handleDownloadUserAttributes(w http.ResponseWriter, r *http.Req
 	}
 }
 
-// handleUserAttributesStatus reports whether a file is currently stored and when it was uploaded.
+// handleAttributesStatus reports whether a document is currently stored and when it was uploaded.
 // The settings UI calls this on load to decide whether to offer Download and Delete, and to show
 // how current the stored data is — neither of which it could get from the download endpoint
 // without pulling the whole file down.
-func (p *Plugin) handleUserAttributesStatus(w http.ResponseWriter, r *http.Request) {
-	status, err := p.readUserAttributesStatus()
+func (p *Plugin) handleAttributesStatus(w http.ResponseWriter, r *http.Request) {
+	status, err := p.readAttributesStatus()
 	if err != nil {
-		p.client.Log.Error("failed to read user attributes status", "err", err)
+		p.client.Log.Error("failed to read attributes status", "err", err)
 		p.errorWithJSON(w, http.StatusInternalServerError, "failed to access storage")
 		return
 	}
@@ -146,14 +145,14 @@ func (p *Plugin) handleUserAttributesStatus(w http.ResponseWriter, r *http.Reque
 	p.responseWithJSON(w, http.StatusOK, status)
 }
 
-// handleDeleteUserAttributes removes the stored file.
+// handleDeleteAttributes removes the stored document.
 //
 // Attribute values already written to user profiles are not affected — deleting the source does not
 // retract what has already been synced. Note this leaves KVStoreProvider with nothing to read,
 // which it reports as an error on every subsequent sync until a replacement is uploaded.
-func (p *Plugin) handleDeleteUserAttributes(w http.ResponseWriter, r *http.Request) {
-	if err := p.client.KV.Delete(sync.UserAttrsStoreKey); err != nil {
-		p.client.Log.Error("failed to delete user attributes", "err", err)
+func (p *Plugin) handleDeleteAttributes(w http.ResponseWriter, r *http.Request) {
+	if err := p.client.KV.Delete(sync.AttributesStoreKey); err != nil {
+		p.client.Log.Error("failed to delete attributes document", "err", err)
 		p.errorWithJSON(w, http.StatusInternalServerError, "failed to delete file")
 		return
 	}
@@ -161,14 +160,14 @@ func (p *Plugin) handleDeleteUserAttributes(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusOK)
 }
 
-// readUserAttributesStatus reports what is stored.
-func (p *Plugin) readUserAttributesStatus() (userAttributesStatus, error) {
-	stored, err := sync.ReadStoredUserAttrs(p.client)
+// readAttributesStatus reports what is stored.
+func (p *Plugin) readAttributesStatus() (attributesStatus, error) {
+	stored, err := sync.ReadStoredAttributes(p.client)
 	if err != nil {
-		return userAttributesStatus{}, err
+		return attributesStatus{}, err
 	}
 
-	status := userAttributesStatus{Exists: len(stored.Data) > 0}
+	status := attributesStatus{Exists: len(stored.Data) > 0}
 	if !stored.LastUpdated.IsZero() {
 		status.LastUpdated = &stored.LastUpdated
 	}
