@@ -55,7 +55,7 @@ func TestParseAttributesDocument_MissingVersionRejected(t *testing.T) {
 }
 
 // TestParseAttributesDocument_UsersAbsent tests that a document with no users list is valid and
-// parses with no records — phase 3 needs a schema-only document to be accepted.
+// parses with no records, since a document can carry only field definitions.
 func TestParseAttributesDocument_UsersAbsent(t *testing.T) {
 	users, err := ParseAttributesDocument([]byte(`{"version": 2}`))
 
