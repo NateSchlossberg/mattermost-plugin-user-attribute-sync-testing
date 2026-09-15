@@ -5,9 +5,9 @@ import {
     adminPassword,
     adminStorageStatePath,
     adminUsername,
+    attributesURL,
     baseURL,
     pluginID,
-    userAttributesURL,
 } from './constants';
 
 /**
@@ -115,7 +115,7 @@ export async function apiDismissOnboarding(context: APIRequestContext) {
 /** Removes any stored attributes file, so a spec starts from a known state. */
 export async function apiDeleteStoredAttributes(context: APIRequestContext) {
     const headers = await getHTTPHeaders(context);
-    await context.delete(userAttributesURL, {headers});
+    await context.delete(attributesURL, {headers});
 }
 
 /**
@@ -124,7 +124,7 @@ export async function apiDeleteStoredAttributes(context: APIRequestContext) {
  */
 export async function apiUploadStoredAttributes(context: APIRequestContext, filePath: string) {
     const headers = await getHTTPHeaders(context);
-    const response = await context.post(userAttributesURL, {
+    const response = await context.post(attributesURL, {
         headers,
         data: await fs.readFile(filePath),
     });
