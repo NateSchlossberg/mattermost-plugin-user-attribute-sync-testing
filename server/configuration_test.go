@@ -20,9 +20,7 @@ func TestOnConfigurationChange(t *testing.T) {
 	// mock has to do the same rather than just return.
 	api.On("LoadPluginConfiguration", mock.AnythingOfType("*main.configuration")).
 		Run(func(args mock.Arguments) {
-			*args.Get(0).(*configuration) = configuration{
-				SyncIntervalMinutes: 30,
-			}
+			*args.Get(0).(*configuration) = configuration{}
 		}).Return(nil).Once()
 
 	p := &Plugin{
@@ -31,7 +29,5 @@ func TestOnConfigurationChange(t *testing.T) {
 	}
 
 	require.NoError(t, p.OnConfigurationChange())
-
-	cfg := p.getConfiguration()
-	assert.Equal(t, 30, cfg.SyncIntervalMinutes)
+	assert.NotNil(t, p.getConfiguration())
 }

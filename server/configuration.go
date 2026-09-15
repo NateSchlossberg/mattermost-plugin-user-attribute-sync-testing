@@ -17,11 +17,7 @@ import (
 //
 // Adding a reference type — a map, slice, or pointer — means updating Clone, whose shallow copy
 // would otherwise leave the clone aliasing the original's underlying data.
-type configuration struct {
-	// SyncIntervalMinutes determines how often (in minutes) the plugin syncs user attributes
-	// from the external source. Must be at least 1 minute.
-	SyncIntervalMinutes int
-}
+type configuration struct{}
 
 // Clone shallow copies the configuration, which is sufficient while every field is a value type.
 func (c *configuration) Clone() *configuration {
