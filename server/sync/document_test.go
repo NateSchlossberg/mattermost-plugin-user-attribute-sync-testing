@@ -7,8 +7,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestParseAttributesDocument_ValidDocument tests that a well-formed v2 document returns its
-// user records.
 func TestParseAttributesDocument_ValidDocument(t *testing.T) {
 	users, err := ParseAttributesDocument([]byte(`{"version": 2, "users": [
 		{"email": "user1@example.com", "job_title": "Engineer"},
@@ -63,8 +61,6 @@ func TestParseAttributesDocument_UsersAbsent(t *testing.T) {
 	assert.Empty(t, users)
 }
 
-// TestParseAttributesDocument_NonObjectUserRejected tests that a users entry that is not a JSON
-// object is rejected.
 func TestParseAttributesDocument_NonObjectUserRejected(t *testing.T) {
 	users, err := ParseAttributesDocument([]byte(`{"version": 2, "users": ["not an object"]}`))
 
@@ -73,8 +69,6 @@ func TestParseAttributesDocument_NonObjectUserRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "not a valid attributes document")
 }
 
-// TestParseAttributesDocument_NotJSONRejected tests that text that is not JSON at all is
-// rejected.
 func TestParseAttributesDocument_NotJSONRejected(t *testing.T) {
 	users, err := ParseAttributesDocument([]byte(`not json`))
 

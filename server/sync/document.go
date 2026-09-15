@@ -10,10 +10,9 @@ import (
 // the same way this version broke the previous bare-array format.
 const SupportedDocumentVersion = 2
 
-// attributesDocument is the uploaded file's shape: a version marker plus the user records this
-// type currently decodes. fields and channels are not decoded yet — encoding/json ignores keys a
-// struct does not name, so a document already carrying them round-trips unchanged rather than
-// being rejected.
+// attributesDocument is the uploaded file's shape: a version marker plus user records.
+// encoding/json ignores keys a struct does not name, so a document carrying fields or channels
+// round-trips unchanged rather than being rejected.
 type attributesDocument struct {
 	Version int                      `json:"version"`
 	Users   []map[string]interface{} `json:"users"`
