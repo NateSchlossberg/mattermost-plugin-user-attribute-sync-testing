@@ -197,7 +197,7 @@ func TestHandleUploadUserAttributes(t *testing.T) {
 		resp := doRequest(t, p, http.MethodPost, "/attributes", userID,
 			[]byte(`[{"email":"user1@example.com","job_title":"Engineer"}]`))
 		requireErrorResponse(t, resp, http.StatusBadRequest,
-			"invalid attributes document: not a valid attributes document: json: cannot unmarshal array into Go value of type sync.attributesDocument")
+			"invalid attributes document: not a valid attributes document: json: cannot unmarshal array into Go value of type sync.AttributesDocument")
 	})
 
 	t.Run("rejects a file over the size limit", func(t *testing.T) {

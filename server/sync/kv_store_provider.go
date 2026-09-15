@@ -89,5 +89,9 @@ func (f *KVStoreProvider) GetUserAttributes() ([]map[string]interface{}, error) 
 	// Update the sync after a successful read but before validation so we dont keep reading an invalid file
 	f.lastTimestampSynced = stored.LastUpdated
 
-	return ParseAttributesDocument(stored.Data)
+	doc, err := ParseAttributesDocument(stored.Data)
+	if err != nil {
+		return nil, err
+	}
+	return doc.Users, nil
 }
