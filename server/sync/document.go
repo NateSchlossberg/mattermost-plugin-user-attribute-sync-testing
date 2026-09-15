@@ -10,19 +10,20 @@ import (
 // the same way this version broke the previous bare-array format.
 const SupportedDocumentVersion = 2
 
-// FieldSchema is the document's `fields` object. Only `user` is named; a `channel` list, if
-// present, is ignored by encoding/json the same way any other unnamed key is.
+// FieldSchema is the document's `fields` object: one list of field definitions per object
+// type the plugin syncs.
 type FieldSchema struct {
-	User []FieldDefinition `json:"user"`
+	User    []FieldDefinition `json:"user"`
+	Channel []FieldDefinition `json:"channel"`
 }
 
 // AttributesDocument is the uploaded file's shape: a version marker, field definitions, and
-// user records. encoding/json ignores keys a struct does not name, so a document carrying
-// channels (or a fields.channel list) round-trips unchanged rather than being rejected.
+// records keyed by identity — users by `email`, channels by `team` plus `channel`.
 type AttributesDocument struct {
-	Version int                      `json:"version"`
-	Fields  FieldSchema              `json:"fields"`
-	Users   []map[string]interface{} `json:"users"`
+	Version  int                      `json:"version"`
+	Fields   FieldSchema              `json:"fields"`
+	Users    []map[string]interface{} `json:"users"`
+	Channels []map[string]interface{} `json:"channels"`
 }
 
 func ParseAttributesDocument(raw []byte) (AttributesDocument, error) {

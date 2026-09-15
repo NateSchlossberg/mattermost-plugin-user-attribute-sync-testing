@@ -96,14 +96,31 @@ func TestParseAttributesDocument_FieldsUser(t *testing.T) {
 	assert.Len(t, doc.Users, 1)
 }
 
-func TestParseAttributesDocument_FieldsChannelIgnored(t *testing.T) {
+func TestParseAttributesDocument_FieldsChannelAndChannels(t *testing.T) {
 	doc, err := ParseAttributesDocument([]byte(`{"version": 2, "fields": {"channel": [
 		{"name": "sensitivity", "display_name": "Sensitivity", "type": "text"}
-	]}, "users": []}`))
+	]}, "channels": [
+		{"team": "ad-1", "channel": "town-square", "classification": ["Alpha-1"]}
+	]}`))
 
 	require.NoError(t, err)
+	require.Len(t, doc.Fields.Channel, 1)
+	assert.Equal(t, "sensitivity", doc.Fields.Channel[0].Name)
+	assert.Equal(t, model.PropertyFieldTypeText, doc.Fields.Channel[0].Type)
+	require.Len(t, doc.Channels, 1)
+	assert.Equal(t, "ad-1", doc.Channels[0]["team"])
+	assert.Equal(t, "town-square", doc.Channels[0]["channel"])
+	assert.Equal(t, []interface{}{"Alpha-1"}, doc.Channels[0]["classification"])
 	assert.Empty(t, doc.Fields.User)
 	assert.Empty(t, doc.Users)
+}
+
+func TestParseAttributesDocument_ChannelKeysAbsent(t *testing.T) {
+	doc, err := ParseAttributesDocument([]byte(`{"version": 2, "users": [{"email": "user1@example.com"}]}`))
+
+	require.NoError(t, err)
+	assert.Nil(t, doc.Fields.Channel)
+	assert.Nil(t, doc.Channels)
 }
 
 func TestParseAttributesDocument_NonArrayFieldsUserRejected(t *testing.T) {
