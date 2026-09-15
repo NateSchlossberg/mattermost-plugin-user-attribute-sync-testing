@@ -182,8 +182,8 @@ func createField(
 ) (*model.PropertyField, error) {
 	client.Log.Info("Field does not exist, creating", "name", def.Name)
 
-	// Shared_only rejects the user-field default (members edit their own value):
-	// anyone could pick any value and fake sharing it. PermissionValues defaults
+	// Shared_only rejects a member-level PermissionValues (members edit their own
+	// value): anyone could pick any value and fake sharing it. PermissionValues defaults
 	// to sysadmin to clear that check. PermissionField and PermissionOptions are
 	// pinned to sysadmin by the server for access_control fields, and default
 	// the same way so all three read identically.
@@ -204,10 +204,10 @@ func createField(
 
 		// TargetType declares the scope at which the field definition lives.
 		// "system" means the field is defined once globally and applies to every
-		// user on the server. The other options ("team", "channel") would scope
-		// the field to a specific team or channel, which is not what we want for
-		// org-wide profile attributes. With TargetType=system, TargetID must be
-		// empty (the system has no per-entity ID).
+		// object of its type on the server. The other options ("team", "channel")
+		// would scope the field to a specific team or channel, which is not what
+		// we want for org-wide attributes. With TargetType=system, TargetID must
+		// be empty (the system has no per-entity ID).
 		TargetType: string(model.PropertyFieldTargetLevelSystem),
 
 		Attrs: model.StringInterface{
@@ -311,7 +311,7 @@ func syncSingleField(
 		// The server already assigned IDs to this field's options, and the cache is
 		// empty on every activation. Load them before building the update payload so
 		// buildOptionsArr sends the existing IDs back - otherwise the server mints new
-		// ones and every stored user value is left pointing at an option that no
+		// ones and every stored value is left pointing at an option that no
 		// longer exists.
 		if def.Type.SupportsOptions() && len(def.Options) > 0 {
 			if err := extractOptionIDs(client, existingField, def, cache); err != nil {
