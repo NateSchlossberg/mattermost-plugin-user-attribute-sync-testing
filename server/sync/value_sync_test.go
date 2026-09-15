@@ -561,3 +561,147 @@ func TestSyncUsers(t *testing.T) {
 		api.AssertExpectations(t)
 	})
 }
+
+func TestSyncChannels(t *testing.T) {
+	groupID := "test-group-id"
+	cache := testFieldIDCache()
+
+	t.Run("successfully syncs a channel", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		channel := &model.Channel{Id: "channel1", Name: "town-square"}
+		api.On("GetChannelByNameForTeamName", "ad-1", "town-square", false).Return(channel, nil)
+		api.On("UpsertPropertyValues", mock.MatchedBy(func(values []*model.PropertyValue) bool {
+			// team and channel are identity keys, never written as values
+			return len(values) == 2 &&
+				values[0].TargetType == model.PropertyValueTargetTypeChannel &&
+				values[0].TargetID == "channel1"
+		})).Return([]*model.PropertyValue{}, nil)
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+		channels := []map[string]interface{}{
+			{
+				"team":      "ad-1",
+				"channel":   "town-square",
+				"job_title": "General discussion",
+				"programs":  []interface{}{"Apples"},
+			},
+		}
+
+		summary := &Summary{}
+		err := SyncChannels(client, groupID, channels, cache, summary)
+		require.NoError(t, err)
+		assert.Equal(t, 1, summary.ChannelsSynced)
+		assert.Equal(t, 0, summary.ChannelsSkipped)
+
+		api.AssertExpectations(t)
+	})
+
+	t.Run("skips channel not found in Mattermost", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		notFoundErr := model.NewAppError("GetChannelByNameForTeamName", "app.channel.get_by_name.app_error", nil, "", 404)
+		api.On("GetChannelByNameForTeamName", "ad-1", "missing", false).Return(nil, notFoundErr)
+		api.On("LogWarn", "Channel not found by team and channel name, skipping",
+			"team", "ad-1",
+			"channel", "missing",
+			"error", mock.Anything)
+
+		channels := []map[string]interface{}{
+			{
+				"team":      "ad-1",
+				"channel":   "missing",
+				"job_title": "General discussion",
+			},
+		}
+
+		summary := &Summary{}
+		err := SyncChannels(client, groupID, channels, cache, summary)
+		require.NoError(t, err)
+		assert.Equal(t, 0, summary.ChannelsSynced)
+		assert.Equal(t, 1, summary.ChannelsSkipped)
+
+		api.AssertExpectations(t)
+	})
+
+	t.Run("skips record missing team or channel", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		api.On("LogWarn", "Channel object missing team or channel field, skipping")
+
+		channels := []map[string]interface{}{
+			{"channel": "town-square", "job_title": "No team"},
+			{"team": "ad-1", "job_title": "No channel"},
+			{"team": 42, "channel": "town-square", "job_title": "Non-string team"},
+		}
+
+		summary := &Summary{}
+		err := SyncChannels(client, groupID, channels, cache, summary)
+		require.NoError(t, err)
+		assert.Equal(t, 0, summary.ChannelsSynced)
+		assert.Equal(t, len(channels), summary.ChannelsSkipped)
+
+		api.AssertExpectations(t)
+	})
+
+	t.Run("empty cache skips every record", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		channel := &model.Channel{Id: "channel1", Name: "town-square"}
+		api.On("GetChannelByNameForTeamName", "ad-1", "town-square", false).Return(channel, nil)
+		api.On("LogWarn", "Unknown field name, skipping",
+			"field_name", "job_title",
+			"record", "ad-1/town-square")
+		api.On("LogDebug", "No property values to sync for channel", "channel", "ad-1/town-square")
+
+		channels := []map[string]interface{}{
+			{"team": "ad-1", "channel": "town-square", "job_title": "General discussion"},
+		}
+
+		summary := &Summary{}
+		err := SyncChannels(client, groupID, channels, NewFieldIDCache(), summary)
+		require.NoError(t, err)
+		assert.Equal(t, 0, summary.ChannelsSynced)
+		assert.Equal(t, 1, summary.ChannelsSkipped)
+
+		api.AssertExpectations(t)
+	})
+
+	t.Run("continues sync when upsert fails for one channel", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		api.On("GetChannelByNameForTeamName", "ad-1", "town-square", false).Return(&model.Channel{Id: "channel1"}, nil)
+		api.On("GetChannelByNameForTeamName", "ad-1", "off-topic", false).Return(&model.Channel{Id: "channel2"}, nil)
+
+		api.On("UpsertPropertyValues", mock.MatchedBy(func(values []*model.PropertyValue) bool {
+			return len(values) > 0 && values[0].TargetID == "channel1"
+		})).Return(nil, assert.AnError).Once()
+		api.On("UpsertPropertyValues", mock.MatchedBy(func(values []*model.PropertyValue) bool {
+			return len(values) > 0 && values[0].TargetID == "channel2"
+		})).Return([]*model.PropertyValue{}, nil).Once()
+
+		api.On("LogError", "Failed to upsert property values, skipping channel",
+			"channel", "ad-1/town-square",
+			"value_count", 1,
+			"error", mock.Anything)
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+		channels := []map[string]interface{}{
+			{"team": "ad-1", "channel": "town-square", "job_title": "General discussion"},
+			{"team": "ad-1", "channel": "off-topic", "job_title": "Random"},
+		}
+
+		summary := &Summary{}
+		err := SyncChannels(client, groupID, channels, cache, summary)
+		require.NoError(t, err)
+		assert.Equal(t, 1, summary.ChannelsSynced)
+		assert.Equal(t, 1, summary.ChannelsSkipped)
+
+		api.AssertExpectations(t)
+	})
+}

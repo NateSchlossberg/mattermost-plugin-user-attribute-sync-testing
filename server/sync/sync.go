@@ -30,12 +30,13 @@ func SyncDocument(client *pluginapi.Client, groupID, pluginID string, doc Attrib
 	// The tier is a property of the server, not of the field, so one check
 	// gates the whole channel pass. Skipped channel fields are still named by
 	// the document, so the deletion pass below keeps them.
+	channelCache := NewFieldIDCache()
 	if len(doc.Fields.Channel) > 0 {
 		if !channelFieldsLicensed(client) {
 			client.Log.Warn("Skipping channel field sync: channel attributes require an Enterprise Advanced license",
 				"field_count", len(doc.Fields.Channel))
 			summary.FieldsSkipped += len(doc.Fields.Channel)
-		} else if _, err := SyncFields(client, groupID, pluginID, model.PropertyFieldObjectTypeChannel, doc.Fields.Channel, &summary); err != nil {
+		} else if channelCache, err = SyncFields(client, groupID, pluginID, model.PropertyFieldObjectTypeChannel, doc.Fields.Channel, &summary); err != nil {
 			return summary, err
 		}
 	}
@@ -45,6 +46,12 @@ func SyncDocument(client *pluginapi.Client, groupID, pluginID string, doc Attrib
 	DeleteOmittedFields(client, groupID, pluginID, doc.Fields.User, doc.Fields.Channel, &summary)
 
 	if err := SyncUsers(client, groupID, doc.Users, userCache, &summary); err != nil {
+		return summary, err
+	}
+
+	// With the channel field pass skipped the cache is empty, so every channel
+	// value is an unknown field and lands in ChannelsSkipped.
+	if err := SyncChannels(client, groupID, doc.Channels, channelCache, &summary); err != nil {
 		return summary, err
 	}
 

@@ -203,3 +203,59 @@ func SyncUsers(api *pluginapi.Client, groupID string, users []map[string]interfa
 
 	return nil
 }
+
+//nolint:revive
+func SyncChannels(api *pluginapi.Client, groupID string, channels []map[string]interface{}, cache *FieldIDCache, summary *Summary) error {
+	for _, channelAttrs := range channels {
+		teamName, teamOk := channelAttrs["team"].(string)
+		channelName, channelOk := channelAttrs["channel"].(string)
+		if !teamOk || teamName == "" || !channelOk || channelName == "" {
+			api.Log.Warn("Channel object missing team or channel field, skipping")
+			summary.ChannelsSkipped++
+			continue
+		}
+		label := teamName + "/" + channelName
+
+		channel, err := api.Channel.GetByNameForTeamName(teamName, channelName, false)
+		if err != nil {
+			api.Log.Warn("Channel not found by team and channel name, skipping",
+				"team", teamName,
+				"channel", channelName,
+				"error", err.Error())
+			summary.ChannelsSkipped++
+			continue
+		}
+
+		values, err := buildPropertyValues(api, model.PropertyValueTargetTypeChannel, channel.Id, []string{"team", "channel"}, label, groupID, channelAttrs, cache)
+		if err != nil {
+			api.Log.Error("Failed to build property values, skipping channel",
+				"channel", label,
+				"error", err.Error())
+			summary.ChannelsSkipped++
+			continue
+		}
+
+		if len(values) == 0 {
+			api.Log.Debug("No property values to sync for channel", "channel", label)
+			summary.ChannelsSkipped++
+			continue
+		}
+
+		_, err = api.Property.UpsertPropertyValues(values)
+		if err != nil {
+			api.Log.Error("Failed to upsert property values, skipping channel",
+				"channel", label,
+				"value_count", len(values),
+				"error", err.Error())
+			summary.ChannelsSkipped++
+			continue
+		}
+
+		summary.ChannelsSynced++
+		api.Log.Debug("Successfully synced channel attributes",
+			"channel", label,
+			"attribute_count", len(values))
+	}
+
+	return nil
+}

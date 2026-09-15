@@ -198,6 +198,46 @@ func TestSyncDocument(t *testing.T) {
 		assert.Equal(t, 0, summary.FieldsSkipped)
 	})
 
+	t.Run("creates a channel field then writes a channel value for it in one call", func(t *testing.T) {
+		client, api := newTestSyncClient(t)
+
+		api.On("GetLicense").Return(&model.License{SkuShortName: model.LicenseShortSkuEnterpriseAdvanced})
+		mockEmptyFieldSearch(api, groupID)
+		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
+			return f.Name == "department" && f.ObjectType == model.PropertyFieldObjectTypeChannel
+		})).Return(&model.PropertyField{ID: "generated_channel_id", Name: "department", Type: model.PropertyFieldTypeText}, nil)
+
+		channel := &model.Channel{Id: "channel1", Name: "town-square"}
+		api.On("GetChannelByNameForTeamName", "ad-1", "town-square", false).Return(channel, nil)
+		api.On("UpsertPropertyValues", mock.MatchedBy(func(values []*model.PropertyValue) bool {
+			return len(values) == 1 &&
+				values[0].FieldID == "generated_channel_id" &&
+				values[0].TargetType == model.PropertyValueTargetTypeChannel &&
+				values[0].TargetID == "channel1"
+		})).Return([]*model.PropertyValue{}, nil)
+
+		doc := AttributesDocument{
+			Version: SupportedDocumentVersion,
+			Fields: FieldSchema{
+				Channel: []FieldDefinition{{
+					Name:        "department",
+					DisplayName: "Department",
+					Type:        model.PropertyFieldTypeText,
+				}},
+			},
+			Channels: []map[string]interface{}{
+				{"team": "ad-1", "channel": "town-square", "department": "Engineering"},
+			},
+		}
+
+		summary, err := SyncDocument(client, groupID, pluginID, doc)
+		require.NoError(t, err)
+		assert.Equal(t, 1, summary.FieldsCreated)
+		assert.Equal(t, 0, summary.FieldsSkipped)
+		assert.Equal(t, 1, summary.ChannelsSynced)
+		assert.Equal(t, 0, summary.ChannelsSkipped)
+	})
+
 	t.Run("skips channel fields below Enterprise Advanced", func(t *testing.T) {
 		licenses := map[string]*model.License{
 			"no license": nil,
