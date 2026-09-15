@@ -296,15 +296,16 @@ func syncSingleField(
 	pluginID string,
 	def FieldDefinition,
 	cache *FieldIDCache,
-) (string, error) {
+) (string, bool, error) {
 	// Try to get existing field
 	existingField, err := client.Property.GetPropertyFieldByName(groupID, "", def.Name)
 
 	var field *model.PropertyField
+	created := false
 	if err == nil && existingField != nil {
 		// Field exists - verify we own it before attempting to update
 		if !isFieldOwnedByPlugin(client, existingField, pluginID, def) {
-			return "", errors.Errorf(
+			return "", false, errors.Errorf(
 				"field %s already exists but is not managed by this plugin",
 				def.Name)
 		}
@@ -327,31 +328,28 @@ func syncSingleField(
 		// Field exists and we own it - update it
 		field, err = updateField(client, groupID, existingField, def, cache)
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 	} else {
-		// Field doesn't exist - create it
 		field, err = createField(client, groupID, def)
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
+		created = true
 	}
 
-	// Store the field name to ID mapping
 	cache.FieldNameToID[def.Name] = field.ID
 
-	// For supported field types, extract option IDs
 	if def.Type.SupportsOptions() && len(def.Options) > 0 {
 		if err := extractOptionIDs(client, field, def, cache); err != nil {
 			client.Log.Error("Failed to extract option IDs",
 				"name", def.Name,
 				"field_id", field.ID,
 				"error", err.Error())
-			// Don't fail the entire sync, just log the error
 		}
 	}
 
-	return field.ID, nil
+	return field.ID, created, nil
 }
 
 // extractOptionIDs extracts option IDs from a field into the cache (if applicable).
@@ -403,7 +401,7 @@ func extractOptionIDs(
 }
 
 //nolint:revive
-func SyncFields(client *pluginapi.Client, groupID, pluginID string, defs []FieldDefinition) (*FieldIDCache, error) {
+func SyncFields(client *pluginapi.Client, groupID, pluginID string, defs []FieldDefinition, summary *Summary) (*FieldIDCache, error) {
 	client.Log.Info("Syncing field definitions", "field_count", len(defs))
 
 	cache := NewFieldIDCache()
@@ -411,14 +409,18 @@ func SyncFields(client *pluginapi.Client, groupID, pluginID string, defs []Field
 	var failedFields []string
 
 	for _, def := range defs {
-		_, err := syncSingleField(client, groupID, pluginID, def, cache)
+		_, created, err := syncSingleField(client, groupID, pluginID, def, cache)
 		if err != nil {
 			client.Log.Error("Failed to sync field",
 				"name", def.Name,
 				"error", err.Error())
 			failedFields = append(failedFields, def.Name)
-			// Continue with next field for graceful degradation
 			continue
+		}
+		if created {
+			summary.FieldsCreated++
+		} else {
+			summary.FieldsUpdated++
 		}
 		cache.FieldNameToType[def.Name] = def.Type
 	}
@@ -427,10 +429,10 @@ func SyncFields(client *pluginapi.Client, groupID, pluginID string, defs []Field
 		client.Log.Warn("Some fields failed to sync",
 			"failed_count", len(failedFields),
 			"failed_fields", failedFields)
-		// Return partial cache even on failures
 	}
+	summary.FieldsSkipped = len(failedFields)
 
-	deleteOmittedFields(client, groupID, pluginID, defs)
+	DeleteOmittedFields(client, groupID, pluginID, defs, summary)
 
 	client.Log.Info("Field sync completed",
 		"total", len(defs),
@@ -445,7 +447,7 @@ const fieldSearchPerPage = 100
 
 // Values are deleted before the field so the server can authorize the value
 // delete against a live field.
-func deleteOmittedFields(client *pluginapi.Client, groupID, pluginID string, defs []FieldDefinition) {
+func DeleteOmittedFields(client *pluginapi.Client, groupID, pluginID string, defs []FieldDefinition, summary *Summary) {
 	named := make(map[string]struct{}, len(defs))
 	for _, def := range defs {
 		named[def.Name] = struct{}{}
@@ -491,6 +493,7 @@ func deleteOmittedFields(client *pluginapi.Client, groupID, pluginID string, def
 					"error", err.Error())
 				continue
 			}
+			summary.FieldsDeleted++
 			client.Log.Info("Deleted omitted field",
 				"field_name", field.Name,
 				"field_id", field.ID)

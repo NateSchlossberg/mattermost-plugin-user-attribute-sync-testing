@@ -122,10 +122,15 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID, defs)
+		summary := &Summary{}
+		cache, err := SyncFields(client, groupID, pluginID, defs, summary)
 
 		require.NoError(t, err)
 		require.NotNil(t, cache)
+		assert.Equal(t, 4, summary.FieldsCreated)
+		assert.Equal(t, 0, summary.FieldsUpdated)
+		assert.Equal(t, 0, summary.FieldsDeleted)
+		assert.Equal(t, 0, summary.FieldsSkipped)
 		assert.Equal(t, "generated_id_1", cache.GetFieldID("job_title"))
 		assert.Equal(t, "generated_id_2", cache.GetFieldID("programs"))
 		assert.Equal(t, "generated_id_3", cache.GetFieldID("clearance"))
@@ -221,7 +226,7 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID, defs)
+		cache, err := SyncFields(client, groupID, pluginID, defs, &Summary{})
 
 		require.NoError(t, err)
 		require.NotNil(t, cache)
@@ -299,7 +304,7 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID, defs)
+		cache, err := SyncFields(client, groupID, pluginID, defs, &Summary{})
 
 		require.NoError(t, err)
 		assert.True(t, multiSelectOptionsVerified, "Options should be verified during field creation")
@@ -344,11 +349,15 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID, defs)
+		summary := &Summary{}
+		cache, err := SyncFields(client, groupID, pluginID, defs, summary)
 
 		// Should not return error (graceful degradation)
 		require.NoError(t, err)
 		require.NotNil(t, cache)
+		assert.Equal(t, 3, summary.FieldsCreated)
+		assert.Equal(t, 0, summary.FieldsUpdated)
+		assert.Equal(t, 1, summary.FieldsSkipped)
 	})
 
 	t.Run("empty list creates no fields", func(t *testing.T) {
@@ -357,7 +366,7 @@ func TestSyncFields(t *testing.T) {
 		mockEmptyFieldSearch(api, groupID)
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID, nil)
+		cache, err := SyncFields(client, groupID, pluginID, nil, &Summary{})
 
 		require.NoError(t, err)
 		require.NotNil(t, cache)
@@ -385,7 +394,7 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID, nil)
+		cache, err := SyncFields(client, groupID, pluginID, nil, &Summary{})
 
 		require.NoError(t, err)
 		require.NotNil(t, cache)
@@ -410,7 +419,7 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID, nil)
+		cache, err := SyncFields(client, groupID, pluginID, nil, &Summary{})
 
 		require.NoError(t, err)
 		require.NotNil(t, cache)
@@ -448,7 +457,7 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID, []FieldDefinition{keep})
+		cache, err := SyncFields(client, groupID, pluginID, []FieldDefinition{keep}, &Summary{})
 
 		require.NoError(t, err)
 		assert.Equal(t, existing.ID, cache.GetFieldID(keep.Name))
@@ -488,7 +497,7 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID, nil)
+		cache, err := SyncFields(client, groupID, pluginID, nil, &Summary{})
 
 		require.NoError(t, err)
 		require.NotNil(t, cache)
@@ -508,7 +517,7 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID, []FieldDefinition{keep})
+		cache, err := SyncFields(client, groupID, pluginID, []FieldDefinition{keep}, &Summary{})
 
 		require.NoError(t, err)
 		assert.Equal(t, created.ID, cache.GetFieldID(keep.Name))
@@ -542,7 +551,7 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID, nil)
+		cache, err := SyncFields(client, groupID, pluginID, nil, &Summary{})
 
 		require.NoError(t, err)
 		require.NotNil(t, cache)

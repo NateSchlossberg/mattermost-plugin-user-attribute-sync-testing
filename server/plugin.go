@@ -81,7 +81,7 @@ func (p *Plugin) OnActivate() error {
 		if parseErr != nil {
 			p.client.Log.Error("Failed to parse stored attributes document, skipping field sync", "error", parseErr.Error())
 		} else {
-			p.fieldIDCache, err = attrsync.SyncFields(p.client, p.groupID, manifest.Id, doc.Fields.User)
+			p.fieldIDCache, err = attrsync.SyncFields(p.client, p.groupID, manifest.Id, doc.Fields.User, &attrsync.Summary{})
 			if err != nil {
 				return errors.Wrap(err, "failed to sync field definitions")
 			}
