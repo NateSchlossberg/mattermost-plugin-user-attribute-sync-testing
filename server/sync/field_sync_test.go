@@ -226,10 +226,15 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID, defs, &Summary{})
+		summary := &Summary{}
+		cache, err := SyncFields(client, groupID, pluginID, defs, summary)
 
 		require.NoError(t, err)
 		require.NotNil(t, cache)
+		assert.Equal(t, 0, summary.FieldsCreated)
+		assert.Equal(t, 4, summary.FieldsUpdated)
+		assert.Equal(t, 0, summary.FieldsDeleted)
+		assert.Equal(t, 0, summary.FieldsSkipped)
 		assert.Equal(t, "existing_id_1", cache.GetFieldID("job_title"))
 		assert.Equal(t, "existing_id_2", cache.GetFieldID("programs"))
 		assert.Equal(t, "existing_id_3", cache.GetFieldID("clearance"))
@@ -394,10 +399,12 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID, nil, &Summary{})
+		summary := &Summary{}
+		cache, err := SyncFields(client, groupID, pluginID, nil, summary)
 
 		require.NoError(t, err)
 		require.NotNil(t, cache)
+		assert.Equal(t, 1, summary.FieldsDeleted)
 		api.AssertExpectations(t)
 	})
 
@@ -457,10 +464,13 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID, []FieldDefinition{keep}, &Summary{})
+		summary := &Summary{}
+		cache, err := SyncFields(client, groupID, pluginID, []FieldDefinition{keep}, summary)
 
 		require.NoError(t, err)
 		assert.Equal(t, existing.ID, cache.GetFieldID(keep.Name))
+		assert.Equal(t, 1, summary.FieldsUpdated)
+		assert.Equal(t, 1, summary.FieldsDeleted)
 		api.AssertExpectations(t)
 		api.AssertNotCalled(t, "DeletePropertyField", groupID, existing.ID)
 	})
@@ -497,10 +507,12 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID, nil, &Summary{})
+		summary := &Summary{}
+		cache, err := SyncFields(client, groupID, pluginID, nil, summary)
 
 		require.NoError(t, err)
 		require.NotNil(t, cache)
+		assert.Equal(t, fieldSearchPerPage+1, summary.FieldsDeleted)
 		api.AssertExpectations(t)
 	})
 
@@ -541,20 +553,30 @@ func TestSyncFields(t *testing.T) {
 			CreateAt: 2,
 			Attrs:    model.StringInterface{model.PropertyAttrsSourcePluginID: pluginID},
 		}
-		api.On("SearchPropertyFields", groupID, mock.Anything).Return([]*model.PropertyField{first, second}, nil).Once()
+		third := &model.PropertyField{
+			ID:       model.NewId(),
+			Name:     "stuck",
+			CreateAt: 3,
+			Attrs:    model.StringInterface{model.PropertyAttrsSourcePluginID: pluginID},
+		}
+		api.On("SearchPropertyFields", groupID, mock.Anything).Return([]*model.PropertyField{first, second, third}, nil).Once()
 		api.On("DeletePropertyValuesForField", groupID, first.ID).Return(errors.New("values failed")).Once()
 		mock.InOrder(
 			api.On("DeletePropertyValuesForField", groupID, second.ID).Return(nil).Once(),
 			api.On("DeletePropertyField", groupID, second.ID).Return(nil).Once(),
 		)
+		api.On("DeletePropertyValuesForField", groupID, third.ID).Return(nil).Once()
+		api.On("DeletePropertyField", groupID, third.ID).Return(errors.New("field failed")).Once()
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		cache, err := SyncFields(client, groupID, pluginID, nil, &Summary{})
+		summary := &Summary{}
+		cache, err := SyncFields(client, groupID, pluginID, nil, summary)
 
 		require.NoError(t, err)
 		require.NotNil(t, cache)
+		assert.Equal(t, 1, summary.FieldsDeleted)
 		api.AssertExpectations(t)
 		api.AssertNotCalled(t, "DeletePropertyField", groupID, first.ID)
 	})
