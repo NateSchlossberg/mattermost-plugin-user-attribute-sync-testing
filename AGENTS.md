@@ -4,7 +4,7 @@ Detailed context for AI agents working on this codebase. [README.md](README.md) 
 
 ## What This Project Is
 
-A **Mattermost plugin that creates plugin-managed user attributes and fills them in from a JSON file.** It exists to set up test environments that need attributes the System Console cannot create: `protected` attributes, and the `source_only` and `shared_only` access modes that are only available on them. The attributes appear on user profiles in the UI and are addressable as `user.attributes.<field_name>` from attribute-based access control (ABAC) policy rules — which is why the plugin writes into the `access_control` property group.
+A **Mattermost plugin that creates plugin-managed user and channel attributes and fills them in from a JSON file.** It exists to set up test environments that need attributes the System Console cannot create: `protected` attributes, and the `source_only` and `shared_only` access modes that are only available on them. The attributes appear on user profiles in the UI and are addressable from attribute-based access control (ABAC) policy rules as `user.attributes.<field_name>` (user attributes) and `resource.attributes.<field_name>` (channel attributes) — which is why the plugin writes into the `access_control` property group.
 
 It is a fork of `mattermost-plugin-user-attribute-sync-starter-template` and is no longer a template. Guidance written for someone building their own plugin does not belong here; guidance for someone loading attributes into a test server does.
 
@@ -12,7 +12,7 @@ It ships **one data source**: a JSON file uploaded through the System Console in
 
 **Plugin ID:** `com.mattermost.user-attribute-sync-test-tool`
 **Min Mattermost version:** 12.0.0 (the `graph` field type requires it). Until a v12 `server/public` is published, `go.mod` reads that module from a local checkout of the `dk-graph-property-fields` branch through a `replace` directive — never hand-edit that checkout, it is read-only reference.
-**License:** Enterprise Advanced, for ABAC. Every field and value operation on the `access_control` group requires a license, so the plugin fails at activation without one.
+**License:** Enterprise Advanced, for ABAC. Every field and value operation on the `access_control` group requires a license, so the plugin fails at activation without one. Channel fields need this tier specifically: below it every channel field is skipped and counted in `FieldsSkipped`, and the rest of the document still syncs.
 **Languages:** Go 1.26.3+ (server), TypeScript/React (webapp)
 
 ## Architecture
@@ -31,12 +31,12 @@ System Console (Admin, on demand)
 ```
 
 The plugin has one sync path, `SyncDocument`:
-1. **Field sync** — If a document is stored (or just uploaded), applies `fields.user` as this plugin's schema (create/update, and delete plugin-owned fields the document omits). With no document, activation skips entirely.
-2. **Value sync** — Writes per-user values from the same document, using the field-ID cache from the field pass.
+1. **Field sync** — If a document is stored (or just uploaded), applies `fields.user` and `fields.channel` as this plugin's schema (create/update, and delete plugin-owned fields the document omits). With no document, activation skips entirely. Channel fields are gated on an Enterprise Advanced license: below that tier every channel field is skipped and counted in `FieldsSkipped`, and the rest of the document still syncs.
+2. **Value sync** — Writes per-user and per-channel values from the same document, using the field-ID caches from the field passes.
 
 Upload and activation both call `runSync()`, which reads the stored document and runs `SyncDocument` under `syncLock` so two triggers cannot interleave their property-service writes. The System Console setting is the UI for that API: upload stores then syncs and shows the summary; delete is a full reset.
 
-All fields and values are stored in the `access_control` property group (`model.AccessControlPropertyGroupName`), with `ObjectType=user` and `TargetType=system`. Living in that group is what makes the fields addressable from ABAC policy expressions.
+All fields and values are stored in the `access_control` property group (`model.AccessControlPropertyGroupName`), with `ObjectType=user` or `ObjectType=channel` and `TargetType=system`. Living in that group is what makes the fields addressable from ABAC policy expressions.
 
 ## Key Files and Their Roles
 
@@ -48,10 +48,10 @@ All fields and values are stored in the `access_control` property group (`model.
 | `server/http_hooks.go` | `ServeHTTP` + `initializeAPI()`. The `gorilla/mux` router and the four `/attributes` handlers, the sysadmin permission check, and the JSON response helpers. Upload stores then syncs; delete wipes plugin-owned fields. |
 | `server/job.go` | `runSync()` — reads the stored document, parses it, calls `sync.SyncDocument()`. Holds `syncLock` for the whole read-and-sync. |
 | `server/configuration.go` | Thread-safe config management with RWMutex. The struct has no settings; `OnConfigurationChange` still loads it. |
-| `server/sync/field_sync.go` | Schema reconciliation from the stored document's `fields.user`. Creates/updates user attribute fields and deletes plugin-owned fields the document omits. Maintains `FieldIDCache` mapping external names to Mattermost-generated IDs and declared types. Counts created/updated/deleted/skipped on `Summary`. |
-| `server/sync/value_sync.go` | `SyncUsers()` — matches users by email, builds PropertyValue objects, bulk upserts. Handles text, date, multiselect, and rank value types. Counts synced and skipped users on `Summary`. |
-| `server/sync/sync.go` | `Summary` and `SyncDocument()` — field sync then value sync, returning the counts the HTTP API and console use. Channel counters exist on the type and stay at zero. |
-| `server/sync/document.go` | `ParseAttributesDocument()` decodes the uploaded bytes into `version`, `fields.user`, and `users`, rejecting anything that is not a JSON object or carries an unsupported `version`. The one parser shared by the upload handler and `runSync`, so the two cannot disagree about what a valid document is. |
+| `server/sync/field_sync.go` | Schema reconciliation from the stored document's `fields.user` and `fields.channel`. Creates/updates fields for the given object type and, after both passes, deletes plugin-owned fields the document omits (`DeleteOmittedFields`, keep-list keyed by object type and name). Maintains `FieldIDCache` mapping external names to Mattermost-generated IDs and declared types. Counts created/updated/deleted/skipped on `Summary`. |
+| `server/sync/value_sync.go` | `SyncUsers()` and `SyncChannels()` — match by email or by team plus channel name, build PropertyValue objects, bulk upsert. Handles text, date, multiselect, and rank value types. Counts synced and skipped users and channels on `Summary`. |
+| `server/sync/sync.go` | `Summary` and `SyncDocument()` — user then channel field sync, one deletion pass, then user then channel values. Channel field sync is skipped below Enterprise Advanced. |
+| `server/sync/document.go` | `ParseAttributesDocument()` decodes the uploaded bytes into `version`, `fields.user`, `fields.channel`, `users`, and `channels`, rejecting anything that is not a JSON object or carries an unsupported `version`. The one parser shared by the upload handler and `runSync`, so the two cannot disagree about what a valid document is. |
 | `server/sync/kv_store_provider.go` | Owns the KV key (`AttributesStoreKey`), the `StoredAttributes` value stored under it, `ReadStoredAttributes`, and `ErrNoStoredDocument`. |
 | `server/main.go` | Plugin entry point (minimal). |
 | `server/manifest.go` | Auto-generated from plugin.json — do not edit manually. |
@@ -90,11 +90,11 @@ The webapp exists only to render the custom `Attributes` setting in the System C
 | `Makefile` | Build orchestration (~420 lines). All build/test/deploy commands. |
 | `build/setup.mk` | Extracts PLUGIN_ID, PLUGIN_VERSION, HAS_SERVER, HAS_WEBAPP from plugin.json. |
 | `build/pluginctl/` | Tool for local Mattermost deployment. |
-| `data/attributes.json` | Example attributes document: `fields.user` plus sample user records. |
+| `data/attributes.json` | Example attributes document: `fields.user` plus sample user records. Channel fields are documented in README.md rather than here, so e2e field-count assertions do not depend on license tier. |
 
 ## Field Definitions
 
-Come from `fields.user` in the uploaded document. `data/attributes.json` is the example set (same four attributes a test environment typically wants):
+Come from `fields.user` and `fields.channel` in the uploaded document — same field-definition shape on both lists. `data/attributes.json` is the example user set (same four attributes a test environment typically wants); channel examples live in README.md:
 
 1. **Job Title** — `job_title`, Text type, Public access
 2. **Programs** — `programs`, Multiselect type, SharedOnly access, options: Apples/Oranges/Lemons/Grapes
@@ -103,7 +103,7 @@ Come from `fields.user` in the uploaded document. `data/attributes.json` is the 
 
 `protected` is always `true` and is not a document field. `visibility`, `access_mode`, `permission_field`, `permission_values`, and `permission_options` are optional and default to `always`, public, and `sysadmin`. Accepted values: visibility `always` / `hidden` / `when_set`; access mode `public` / `source_only` / `shared_only`; permission levels `none` / `sysadmin` / `member` / `admin`. `shared_only` with `permission_values: member` is rejected by the server; that field is skipped and logged, and the rest of the document still syncs.
 
-The uploaded document is the full list of fields this plugin owns: a plugin-owned field it omits is deleted with its values. Fields owned by an admin or another plugin are left alone. It is not the full list of values — a user the document does not mention keeps existing values; values disappear only when their field does. With no document stored, activation skips field sync, so a restart cannot delete attributes.
+The uploaded document is the full list of fields this plugin owns: a plugin-owned field it omits is deleted with its values. This is per object type: a document that defines `fields.user` but no `fields.channel` deletes the plugin's channel fields, and the reverse. Fields owned by an admin or another plugin are left alone. It is not the full list of values — a user or channel the document does not mention keeps existing values; values disappear only when their field does. With no document stored, activation skips field sync, so a restart cannot delete attributes.
 
 Field types cannot be changed after creation (a Mattermost limitation). To change one, upload a document that omits the field (deletes it and its values), then upload again with the new type.
 
@@ -117,25 +117,25 @@ Field types cannot be changed after creation (a Mattermost limitation). To chang
 
 1. `OnActivate()` calls `initializeAPI()` to build the HTTP router, then `runSync()`
 2. `runSync()` holds `syncLock`, reads the stored document via `ReadStoredAttributes`, parses it, and calls `SyncDocument()`. No document is `ErrNoStoredDocument` — activation logs and continues; the HTTP routes stay up.
-3. `SyncDocument()` runs `SyncFields()` then `SyncUsers()`, accumulating a `Summary`. The field-ID cache from the first pass is used by the second and is not kept on the plugin.
-4. `SyncUsers()` iterates users, looks up each by email, calls `buildPropertyValues()` to create `PropertyValue` objects, then bulk upserts via `Property.UpsertPropertyValues()`
+3. `SyncDocument()` runs `SyncFields()` for users, then for channels if licensed, then `DeleteOmittedFields`, then `SyncUsers()` and `SyncChannels()`, accumulating a `Summary`. Each field pass has its own field-ID cache, used immediately for that object type's values and not kept on the plugin. Below Enterprise Advanced the channel field pass is skipped (`FieldsSkipped`) and `SyncChannels` still runs against an empty cache, so channel values land in `ChannelsSkipped`.
+4. `SyncUsers()` iterates users, looks up each by email, calls `buildPropertyValues()` to create `PropertyValue` objects, then bulk upserts via `Property.UpsertPropertyValues()`. `SyncChannels()` does the same after `Channel.GetByNameForTeamName(team, channel)`.
 5. For fields with options (select, multiselect, rank), option names are translated to option IDs using `FieldIDCache`
 
 Upload is the same path after the KV write: `handleUploadAttributes` stores the bytes, then `runSync()`, and answers `201` with the `Summary`. `handleDeleteAttributes` takes the same lock, deletes the KV key first, then `DeleteOmittedFields` with an empty keep-list so every plugin-owned field (and its values) is removed.
 
 **Invariants worth knowing before changing sync code:**
 
-- `email` is the join key between external data and Mattermost users. It is consumed by `SyncUsers()` and explicitly skipped by `buildPropertyValue()`, so it is never written as an attribute. Changing the identity strategy means touching both.
-- `FieldIDCache` is built during field sync inside `SyncDocument` and used immediately for value sync. External names → Mattermost-generated field IDs; option names → option IDs; `FieldNameToType` holds the type declared in the document. A cache miss on a field name is a skip-with-warning; a cache miss on an *option* name is an error for that value.
+- `email` is the join key between external data and Mattermost users; `team` and `channel` are the join keys for channel records. They are consumed by `SyncUsers()` / `SyncChannels()` and listed as identity keys so `buildPropertyValue()` never writes them as attributes. Changing the identity strategy means touching both.
+- A `FieldIDCache` is built per object type during field sync inside `SyncDocument` and used immediately for that type's value sync. External names → Mattermost-generated field IDs; option names → option IDs; `FieldNameToType` holds the type declared in the document. A cache miss on a field name is a skip-with-warning; a cache miss on an *option* name is an error for that value.
 - Value JSON shape is type-dependent: text and date are marshaled strings; multiselect is an array of option **IDs**, not names; rank is a single option **ID** string, so a rank value looks like a text value on the wire and is only distinguishable by consulting the field definition.
 - `FieldNameToType` on `FieldIDCache` is how value sync recovers a field's declared type from the document's key. Adding an option-bearing field type means updating the value-formatting switch in `buildPropertyValue()` together with how field sync records the type, or values will be written as raw names instead of option IDs.
-- Failure handling is per-user and per-field: unknown fields, unsupported value types, format errors, missing users, and upsert failures all log and continue. `SyncUsers()` returns `nil` unless something structural goes wrong — a "successful" sync can have written nothing. Those skips still increment `UsersSkipped` / `FieldsSkipped` on the summary.
+- Failure handling is per-record and per-field: unknown fields, unsupported value types, format errors, missing users or channels, and upsert failures all log and continue. `SyncUsers()` and `SyncChannels()` return `nil` unless something structural goes wrong — a "successful" sync can have written nothing. Those skips still increment `UsersSkipped` / `ChannelsSkipped` / `FieldsSkipped` on the summary.
 - `syncLock` serializes `runSync()` (activation and upload) and `handleDeleteAttributes`. The lock covers the stored-document read as well as the property-service writes, so two triggers cannot interleave.
 - An upload stores the document, then syncs it, and the response body is the `Summary` the console renders. A stored document whose sync then fails is still stored (`500`, "document stored but sync failed") — activation will retry it.
 - `ErrNoStoredDocument` is the empty-store case (`len(Data) == 0`), not a parse error. Activation treats it as skip-with-info; `runSync` callers that expected a document they just wrote treat any error as failure.
 - One KV key, `AttributesStoreKey` (`attributes`), holds a `StoredAttributes` — the uploaded bytes and the timestamp the status endpoint reports, written and deleted as one value. `ReadStoredAttributes` is the only reader: it decodes the raw value itself rather than letting `KV.Get` unmarshal in place, which would surface an unreachable store and a corrupt value as the same error. An unset key is neither — `KV.Get` returns no error and leaves the target untouched, so "nothing uploaded" is the `len(Data) == 0` case.
 - `pluginapi`'s `KV.Set` stores raw bytes only when handed a `[]byte` and JSON-encodes anything else, so the document is base64 inside the envelope — roughly a third larger in the database than on disk. `json.RawMessage` would avoid that, at the cost of `json.Marshal` compacting the JSON and so breaking the byte-for-byte download.
-- **`ParseAttributesDocument` is the single place that decides what a valid document is**, shared by the upload handler and the sync path, so the two cannot drift into accepting different things. It decodes `version`, `fields.user`, and `users`; `encoding/json` ignores keys a struct does not name, and the stored bytes are the uploaded bytes verbatim, so a document already carrying `channels` round-trips unchanged.
+- **`ParseAttributesDocument` is the single place that decides what a valid document is**, shared by the upload handler and the sync path, so the two cannot drift into accepting different things. It decodes `version`, `fields.user`, `fields.channel`, `users`, and `channels`; omitted lists stay empty.
 
 ## HTTP API
 
@@ -167,7 +167,7 @@ Things to preserve when changing these:
 ## Adding to the Plugin
 
 ### A new attribute
-Add an object to `fields.user` in the uploaded document and upload it. Select, multiselect, and rank types also need `options` populated; on a rank field every option needs a `rank`, which `buildOptionsArr()` enforces.
+Add an object to `fields.user` or `fields.channel` in the uploaded document and upload it. Select, multiselect, and rank types also need `options` populated; on a rank field every option needs a `rank`, which `buildOptionsArr()` enforces.
 
 ### Server-side rules to work within
 Enforced by the property service, not by this plugin, so they cannot be worked around from here:
@@ -269,11 +269,14 @@ cd e2e && npm test -- -g 'renders the upload panel'  # by title
 Used via `pluginapi.Client`:
 
 - `Property.GetPropertyGroup(name)` — Fetch the `access_control` property group
-- `Property.GetPropertyFieldByName(groupID, objectID, fieldName)` — Lookup field by name
+- `Property.SearchPropertyFields(groupID, opts)` — Page fields in the group; `ObjectTypes` filters user vs channel so a shared name does not collide
 - `Property.CreatePropertyField(field)` — Create field (returns generated ID)
 - `Property.UpdatePropertyField(groupID, field)` — Modify existing field
-- `Property.UpsertPropertyValues(values)` — Bulk write user attribute values
+- `Property.UpsertPropertyValues(values)` — Bulk write attribute values
+- `Property.DeletePropertyValuesForField` / `DeletePropertyField` — Wipe an omitted field's values then the field
 - `User.GetByEmail(email)` — Find user by email
+- `Channel.GetByNameForTeamName(teamName, channelName, includeDeleted)` — Resolve a channel record
+- `System.GetLicense()` — Channel field sync checks `MinimumEnterpriseAdvancedLicense` against this
 - `User.HasPermissionTo(userID, permission)` — The sysadmin gate on every HTTP route
 - `KV.Set/Get/Delete(key, …)` — Storage behind `ReadStoredAttributes` and the upload API. Note `KV.Set` returns `(bool, error)`: a `false` with no error means the write did not happen, and callers here treat that as a failure.
 - `Log.Info/Warn/Error/Debug` — Structured logging

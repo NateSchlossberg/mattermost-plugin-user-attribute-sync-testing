@@ -1,10 +1,10 @@
 # User Attribute Sync Test Tool
 
-A Mattermost plugin that creates plugin-managed user attributes and fills them in from a JSON file. Use it to set up test environments that need attributes the System Console cannot create.
+A Mattermost plugin that creates plugin-managed user and channel attributes and fills them in from a JSON file. Use it to set up test environments that need attributes the System Console cannot create.
 
 Attributes created by a plugin belong to that plugin. They are marked `protected`, which means only the plugin can change their definition or write their values — admins cannot edit them, through the System Console or the REST API. The `source_only` and `shared_only` access modes are available only on attributes like these.
 
-Field definitions and values both come from a JSON file uploaded through the System Console. The attributes live in the `access_control` property group, so ABAC policies can reference them as `user.attributes.<name>`.
+Field definitions and values both come from a JSON file uploaded through the System Console. The attributes live in the `access_control` property group, so ABAC policies can reference user attributes as `user.attributes.<name>` and channel attributes as `resource.attributes.<name>`.
 
 This repository is a fork of [mattermost-plugin-user-attribute-sync-starter-template](https://github.com/mattermost/mattermost-plugin-user-attribute-sync-starter-template). If you want a minimal starting point for your own plugin, use that one instead.
 
@@ -26,7 +26,7 @@ The attributes appear in **System Console → User Attributes**, on user profile
 ## Requirements
 
 - Mattermost server 12.0.0 or later (the `graph` attribute type requires it)
-- An Enterprise Advanced license, for ABAC
+- An Enterprise Advanced license, for ABAC. Channel attributes need this tier specifically: below it every channel field is skipped and counted in the upload summary's skipped-fields number, and user attributes still sync.
 - Go 1.26.3 or later, to build the server binaries
 - Node v20.11, to build the webapp bundle and run the end-to-end tests
 
@@ -46,7 +46,7 @@ With nothing uploaded, activation does not create or delete attributes — a fir
 
 ## The data file
 
-A JSON document with a `version`, a `fields.user` list, and a `users` array:
+A JSON document with a `version`, a `fields.user` list, a `users` array, and optionally `fields.channel` and `channels`:
 
 ```json
 {
@@ -72,7 +72,34 @@ A JSON document with a `version`, a `fields.user` list, and a `users` array:
 
 `data/attributes.json` in this repository is an example of the format — the four attributes in **What it creates** live there, not in Go. Replace the email addresses with your own test users before uploading it. `version` must be `2` — an older upload in the bare-array format is rejected.
 
-The uploaded document is the full list of fields this plugin owns. A field it previously created that the document omits is deleted along with its values when the document is applied. Fields owned by an admin or another plugin are left alone. It is not the full list of values: a user the document does not mention keeps whatever they already have. Values disappear only when their field does.
+The document can also define channel attributes: a `fields.channel` list in the same shape as `fields.user`, and a `channels` array whose records are identified by team name and channel name rather than email:
+
+```json
+{
+  "fields": {
+    "channel": [
+      {
+        "name": "classification",
+        "display_name": "Classification",
+        "type": "multiselect",
+        "access_mode": "shared_only",
+        "options": [{"name": "Alpha-1"}, {"name": "Beta-2"}]
+      }
+    ]
+  },
+  "channels": [
+    {
+      "team": "ad-1",
+      "channel": "town-square",
+      "classification": ["Alpha-1"]
+    }
+  ]
+}
+```
+
+Channel fields are `ObjectType=channel` fields in the same `access_control` group, addressable from ABAC as `resource.attributes.<name>` where a user attribute is `user.attributes.<name>`. `team` and `channel` are identity keys — they match the record to a channel and are never written as attribute values. A team/channel pair that resolves to no channel is skipped with a warning, the same as an email matching no user; the rest of the document still syncs. `data/attributes.json` stays user-only so the end-to-end tests can assert exact field counts without depending on the test server's license tier.
+
+The uploaded document is the full list of fields this plugin owns. A field it previously created that the document omits is deleted along with its values when the document is applied. This is per object type: a document that defines `fields.user` but no `fields.channel` deletes the plugin's channel fields, and the reverse. Fields owned by an admin or another plugin are left alone. It is not the full list of values: a user or channel the document does not mention keeps whatever it already has. Values disappear only when their field does.
 
 `visibility`, `access_mode`, `permission_field`, `permission_values`, and `permission_options` are optional. If omitted they default to visibility `always`, access mode `public`, and permission levels `sysadmin`. Accepted values:
 
@@ -82,11 +109,11 @@ The uploaded document is the full list of fields this plugin owns. A field it pr
 
 `shared_only` with `permission_values: member` is a combination the server rejects. A rejected field is skipped and logged; the rest of the document still syncs. `protected` is not a document field — it is always `true`.
 
-- `email` matches the record to a Mattermost user. It is never written as an attribute.
-- Every other key on a user record is an attribute `name` from `fields.user`. Keys that do not match a field in that list are skipped with a warning in the logs.
+- `email` matches a user record to a Mattermost user; `team` and `channel` match a channel record. None of them are written as attributes.
+- Every other key on a record is an attribute `name` from `fields.user` (user records) or `fields.channel` (channel records). Keys that do not match a field in that list are skipped with a warning in the logs.
 - Text and date values are strings; dates use `YYYY-MM-DD`.
 - Multiselect values are an array of option names. Rank and select values are a single option name. Option names are translated to the option IDs Mattermost generated when it created the attribute, so they have to match the field's `options` exactly.
-- Records whose email matches no user are skipped, as are individual values that fail to convert. The rest of the file still syncs.
+- Records that match no user or channel are skipped, as are individual values that fail to convert. The rest of the file still syncs.
 
 ## Where the values come from
 
@@ -122,7 +149,7 @@ curl -X POST \
 
 ## How syncing works
 
-An upload stores the document and then applies it: fields from `fields.user`, then per-user values. The HTTP response is the summary the System Console panel shows, so you do not have to read the plugin log to see what happened. Two uploads (or an upload and an activation) cannot interleave — they wait on one lock.
+An upload stores the document and then applies it: fields from `fields.user` and `fields.channel`, then per-user and per-channel values. The HTTP response is the summary the System Console panel shows, so you do not have to read the plugin log to see what happened. Two uploads (or an upload and an activation) cannot interleave — they wait on one lock.
 
 If a document is already stored, activation reapplies it the same way. With no document stored, activation does nothing — it cannot delete fields.
 
@@ -150,7 +177,7 @@ Access mode is separate from `visibility`, which only controls whether values ar
 
 ## Changing which attributes it creates
 
-Attribute definitions live in `fields.user` in the uploaded document. Edit `data/attributes.json` (or whatever you upload), then upload it.
+Attribute definitions live in `fields.user` (and `fields.channel` for channel attributes) in the uploaded document. Edit `data/attributes.json` (or whatever you upload), then upload it.
 
 ### Add an attribute
 
@@ -229,7 +256,7 @@ Mattermost does not allow an attribute's type to change after it is created. To 
 ├── server/
 │   ├── sync/
 │   │   ├── field_sync.go         # Schema reconciliation from the uploaded document
-│   │   ├── value_sync.go         # Writing per-user values
+│   │   ├── value_sync.go         # Writing per-user and per-channel values
 │   │   ├── sync.go               # SyncDocument: fields then values, returning the summary
 │   │   ├── document.go           # Parses the uploaded document, shared by upload and sync
 │   │   └── kv_store_provider.go  # Stored document in the key-value store
