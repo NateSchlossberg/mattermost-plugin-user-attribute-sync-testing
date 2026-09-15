@@ -150,19 +150,22 @@ func (p *Plugin) handleAttributesStatus(w http.ResponseWriter, r *http.Request) 
 	p.responseWithJSON(w, http.StatusOK, status)
 }
 
-// handleDeleteAttributes removes the stored document.
-//
-// Attribute values already written to user profiles are not affected — deleting the source does not
-// retract what has already been synced. Note this leaves KVStoreProvider with nothing to read,
-// which it reports as an error on every subsequent sync until a replacement is uploaded.
+// handleDeleteAttributes clears the stored document and then deletes every field
+// this plugin owns (values first, then the field). The document is removed first
+// so a half-failed field wipe cannot be reapplied on the next activation.
 func (p *Plugin) handleDeleteAttributes(w http.ResponseWriter, r *http.Request) {
+	p.syncLock.Lock()
+	defer p.syncLock.Unlock()
+
 	if err := p.client.KV.Delete(sync.AttributesStoreKey); err != nil {
 		p.client.Log.Error("failed to delete attributes document", "err", err)
 		p.errorWithJSON(w, http.StatusInternalServerError, "failed to delete file")
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	summary := sync.Summary{}
+	sync.DeleteOmittedFields(p.client, p.groupID, manifest.Id, nil, &summary)
+	p.responseWithJSON(w, http.StatusOK, summary)
 }
 
 // readAttributesStatus reports what is stored.
