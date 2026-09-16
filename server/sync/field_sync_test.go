@@ -314,6 +314,176 @@ func TestSyncFields(t *testing.T) {
 		assert.NotNil(t, cache)
 	})
 
+	t.Run("graph field is created with options and parent links inline", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		graphDefs := []FieldDefinition{{
+			Name:        "classification",
+			DisplayName: "Classification",
+			Type:        model.PropertyFieldTypeGraph,
+			Options: []model.CustomProfileAttributesSelectOption{
+				{Name: "Alpha"},
+				{Name: "Alpha-1", Parents: model.NewPointer([]string{"Alpha"})},
+			},
+		}}
+
+		var sentOptions []interface{}
+		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
+			if f.Name != "classification" || f.Type != model.PropertyFieldTypeGraph {
+				return false
+			}
+			options, ok := f.Attrs[model.PropertyFieldAttributeOptions].([]interface{})
+			if !ok {
+				return false
+			}
+			sentOptions = options
+			return true
+		})).Return(&model.PropertyField{
+			ID:   "generated_graph_id",
+			Name: "classification",
+			Type: model.PropertyFieldTypeGraph,
+			Attrs: model.StringInterface{
+				model.PropertyFieldAttributeOptions: []interface{}{
+					map[string]interface{}{"id": "opt_id_a", "name": "Alpha"},
+					map[string]interface{}{"id": "opt_id_a1", "name": "Alpha-1"},
+				},
+			},
+		}, nil)
+		mockEmptyFieldSearch(api, groupID)
+
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		summary := &Summary{}
+		cache, err := SyncFields(client, groupID, pluginID, model.PropertyFieldObjectTypeUser, graphDefs, summary)
+
+		require.NoError(t, err)
+		assert.Equal(t, 1, summary.FieldsCreated)
+		assert.Equal(t, 0, summary.FieldsSkipped)
+		require.Len(t, sentOptions, 2)
+		root, ok := sentOptions[0].(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, "Alpha", root["name"])
+		assert.NotContains(t, root, "parents")
+		child, ok := sentOptions[1].(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, []interface{}{"Alpha"}, child["parents"])
+		assert.Equal(t, "opt_id_a", cache.GetOptionID("classification", "Alpha"))
+		assert.Equal(t, "opt_id_a1", cache.GetOptionID("classification", "Alpha-1"))
+		api.AssertExpectations(t)
+	})
+
+	t.Run("graph field update re-sends parents with the cached option IDs", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		graphDefs := []FieldDefinition{{
+			Name:        "classification",
+			DisplayName: "Classification",
+			Type:        model.PropertyFieldTypeGraph,
+			Options: []model.CustomProfileAttributesSelectOption{
+				{Name: "Alpha"},
+				{Name: "Alpha-1", Parents: model.NewPointer([]string{"Alpha"})},
+			},
+		}}
+
+		// The server reads a graph field's options back without parent
+		// information, so the lookup supplies only the option IDs.
+		existing := &model.PropertyField{
+			ID:      "existing_graph_id",
+			GroupID: groupID,
+			Name:    "classification",
+			Type:    model.PropertyFieldTypeGraph,
+			Attrs: model.StringInterface{
+				model.PropertyAttrsSourcePluginID: pluginID,
+				model.PropertyFieldAttributeOptions: []interface{}{
+					map[string]interface{}{"id": "opt_id_a", "name": "Alpha"},
+					map[string]interface{}{"id": "opt_id_a1", "name": "Alpha-1"},
+				},
+			},
+		}
+
+		var sentOptions []interface{}
+		api.On("UpdatePropertyField", groupID, mock.MatchedBy(func(f *model.PropertyField) bool {
+			if f.ID != "existing_graph_id" {
+				return false
+			}
+			options, ok := f.Attrs[model.PropertyFieldAttributeOptions].([]interface{})
+			if !ok {
+				return false
+			}
+			sentOptions = options
+			return true
+		})).Return(existing, nil).Once()
+		mockFieldLookup(api, groupID, existing)
+		mockEmptyFieldSearch(api, groupID)
+
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		summary := &Summary{}
+		_, err := SyncFields(client, groupID, pluginID, model.PropertyFieldObjectTypeUser, graphDefs, summary)
+
+		require.NoError(t, err)
+		assert.Equal(t, 1, summary.FieldsUpdated)
+		require.Len(t, sentOptions, 2)
+		root, ok := sentOptions[0].(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, "opt_id_a", root["id"])
+		assert.NotContains(t, root, "parents")
+		child, ok := sentOptions[1].(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, "opt_id_a1", child["id"])
+		assert.Equal(t, []interface{}{"Alpha"}, child["parents"])
+		api.AssertExpectations(t)
+	})
+
+	t.Run("a refused graph field is skipped and the rest of the document syncs", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		graphDefs := []FieldDefinition{
+			{
+				Name:        "classification",
+				DisplayName: "Classification",
+				Type:        model.PropertyFieldTypeGraph,
+				Options: []model.CustomProfileAttributesSelectOption{
+					{Name: "Alpha"},
+					{Name: "Alpha-1", Parents: model.NewPointer([]string{"Alpha"})},
+				},
+			},
+			{
+				Name:        "job_title",
+				DisplayName: "Job Title",
+				Type:        model.PropertyFieldTypeText,
+			},
+		}
+
+		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
+			return f.Name == "classification"
+		})).Return(nil, errors.New("graph fields are disabled")).Once()
+		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
+			return f.Name == "job_title"
+		})).Return(&model.PropertyField{ID: "generated_id_1", Name: "job_title", Type: model.PropertyFieldTypeText}, nil).Once()
+		mockEmptyFieldSearch(api, groupID)
+
+		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
+
+		summary := &Summary{}
+		cache, err := SyncFields(client, groupID, pluginID, model.PropertyFieldObjectTypeUser, graphDefs, summary)
+
+		require.NoError(t, err)
+		assert.Equal(t, 1, summary.FieldsCreated)
+		assert.Equal(t, 1, summary.FieldsSkipped)
+		assert.Equal(t, "generated_id_1", cache.GetFieldID("job_title"))
+		assert.Equal(t, "", cache.GetFieldID("classification"))
+		api.AssertExpectations(t)
+	})
+
 	t.Run("continues on partial failures", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
