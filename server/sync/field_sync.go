@@ -399,12 +399,6 @@ func extractOptionIDs(
 	return nil
 }
 
-// The server gates channel-attribute writes in its api4 layer, which the
-// plugin API bypasses, so the tier check has to happen here.
-func channelFieldsLicensed(client *pluginapi.Client) bool {
-	return model.MinimumEnterpriseAdvancedLicense(client.System.GetLicense())
-}
-
 //nolint:revive
 func SyncFields(client *pluginapi.Client, groupID, pluginID, objectType string, defs []FieldDefinition, summary *Summary) (*FieldIDCache, error) {
 	client.Log.Info("Syncing field definitions", "field_count", len(defs))

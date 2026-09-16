@@ -28,11 +28,13 @@ func SyncDocument(client *pluginapi.Client, groupID, pluginID string, doc Attrib
 	}
 
 	// The tier is a property of the server, not of the field, so one check
-	// gates the whole channel pass. Skipped channel fields are still named by
-	// the document, so the deletion pass below keeps them.
+	// gates the whole channel pass. The plugin API bypasses the server's
+	// api4 license gate, so the check has to live here. Skipped channel
+	// fields are still named by the document, so the deletion pass below
+	// keeps them.
 	channelCache := NewFieldIDCache()
 	if len(doc.Fields.Channel) > 0 {
-		if !channelFieldsLicensed(client) {
+		if !model.MinimumEnterpriseAdvancedLicense(client.System.GetLicense()) {
 			client.Log.Warn("Skipping channel field sync: channel attributes require an Enterprise Advanced license",
 				"field_count", len(doc.Fields.Channel))
 			summary.FieldsSkipped += len(doc.Fields.Channel)
