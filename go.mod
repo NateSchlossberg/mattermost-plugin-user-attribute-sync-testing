@@ -58,7 +58,3 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
-
-// The graph field type is unreleased; point at the branch that has it until a v12
-// server/public is published, then delete this line and go.mod's require reverts to it.
-replace github.com/mattermost/mattermost/server/public => ../../mattermost/graph/mattermost/server/public
