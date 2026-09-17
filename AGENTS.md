@@ -48,8 +48,8 @@ All fields and values are stored in the `access_control` property group (`model.
 | `server/http_hooks.go` | `ServeHTTP` + `initializeAPI()`. The `gorilla/mux` router and the four `/attributes` handlers, the sysadmin permission check, and the JSON response helpers. Upload stores then syncs; delete wipes plugin-owned fields. |
 | `server/job.go` | `runSync()` — reads the stored document, parses it, calls `sync.SyncDocument()`. Holds `syncLock` for the whole read-and-sync. |
 | `server/configuration.go` | Thread-safe config management with RWMutex. The struct has no settings; `OnConfigurationChange` still loads it. |
-| `server/sync/field_sync.go` | Schema reconciliation from the stored document's `fields.user` and `fields.channel`. Creates/updates fields for the given object type and, after both passes, deletes plugin-owned fields the document omits (`DeleteOmittedFields`, keep-list keyed by object type and name). Maintains `FieldIDCache` mapping external names to Mattermost-generated IDs and declared types. Counts created/updated/deleted/skipped on `Summary`. |
-| `server/sync/value_sync.go` | `SyncUsers()` and `SyncChannels()` — match by email or by team plus channel name, build PropertyValue objects, bulk upsert. Handles text, date, multiselect, and rank value types. Counts synced and skipped users and channels on `Summary`. |
+| `server/sync/field_sync.go` | Schema reconciliation from the stored document's `fields.user` and `fields.channel`. Creates/updates fields for the given object type and, after both passes, deletes plugin-owned fields the document omits (`DeleteOmittedFields`, keep-list keyed by object type and name). Maintains `FieldIDCache` mapping external names to Mattermost-generated IDs and declared types. Graph options are written inline, with their `parents` name links, in the same field write. Counts created/updated/deleted/skipped on `Summary`. |
+| `server/sync/value_sync.go` | `SyncUsers()` and `SyncChannels()` — match by email or by team plus channel name, build PropertyValue objects, bulk upsert. Handles text, date, multiselect, graph, and rank value types. Counts synced and skipped users and channels on `Summary`. |
 | `server/sync/sync.go` | `Summary` and `SyncDocument()` — user then channel field sync, one deletion pass, then user then channel values. Channel field sync is skipped below Enterprise Advanced. |
 | `server/sync/document.go` | `ParseAttributesDocument()` decodes the uploaded bytes into `version`, `fields.user`, `fields.channel`, `users`, and `channels`, rejecting anything that is not a JSON object or carries an unsupported `version`. The one parser shared by the upload handler and `runSync`, so the two cannot disagree about what a valid document is. |
 | `server/sync/kv_store_provider.go` | Owns the KV key (`AttributesStoreKey`), the `StoredAttributes` value stored under it, `ReadStoredAttributes`, and `ErrNoStoredDocument`. |
@@ -103,9 +103,11 @@ Come from `fields.user` and `fields.channel` in the uploaded document — same f
 
 `protected` is always `true` and is not a document field. `visibility`, `access_mode`, `permission_field`, `permission_values`, and `permission_options` are optional and default to `always`, public, and `sysadmin`. Accepted values: visibility `always` / `hidden` / `when_set`; access mode `public` / `source_only` / `shared_only`; permission levels `none` / `sysadmin` / `member` / `admin`. `shared_only` with `permission_values: member` is rejected by the server; that field is skipped and logged, and the rest of the document still syncs.
 
+A `graph` field's options may each carry a `parents` list naming the options directly above them, resolved by name within the same `options` list — so option names must be unique, and graph options cannot carry `rank`. A graph value is a list of option names, written like a multiselect value. The server refuses the field when its `PropertyFieldGraph` feature flag is off; a refused field is skipped and logged, and the rest of the document still syncs.
+
 The uploaded document is the full list of fields this plugin owns: a plugin-owned field it omits is deleted with its values. This is per object type: a document that defines `fields.user` but no `fields.channel` deletes the plugin's channel fields, and the reverse. Fields owned by an admin or another plugin are left alone. It is not the full list of values — a user or channel the document does not mention keeps existing values; values disappear only when their field does. With no document stored, activation skips field sync, so a restart cannot delete attributes.
 
-Field types cannot be changed after creation (a Mattermost limitation). To change one, upload a document that omits the field (deletes it and its values), then upload again with the new type.
+Field types cannot be changed after creation (a Mattermost limitation), and conversions to or from `graph` are refused outright. To change one, upload a document that omits the field (deletes it and its values), then upload again with the new type.
 
 ### Access Modes
 
@@ -119,7 +121,7 @@ Field types cannot be changed after creation (a Mattermost limitation). To chang
 2. `runSync()` holds `syncLock`, reads the stored document via `ReadStoredAttributes`, parses it, and calls `SyncDocument()`. No document is `ErrNoStoredDocument` — activation logs and continues; the HTTP routes stay up.
 3. `SyncDocument()` runs `SyncFields()` for users, then for channels if licensed, then `DeleteOmittedFields`, then `SyncUsers()` and `SyncChannels()`, accumulating a `Summary`. Each field pass has its own field-ID cache, used immediately for that object type's values and not kept on the plugin. Below Enterprise Advanced the channel field pass is skipped (`FieldsSkipped`) and `SyncChannels` still runs against an empty cache, so channel values land in `ChannelsSkipped`.
 4. `SyncUsers()` iterates users, looks up each by email, calls `buildPropertyValues()` to create `PropertyValue` objects, then bulk upserts via `Property.UpsertPropertyValues()`. `SyncChannels()` does the same after `Channel.GetByNameForTeamName(team, channel)`.
-5. For fields with options (select, multiselect, rank), option names are translated to option IDs using `FieldIDCache`
+5. For fields with options (select, multiselect, rank, graph), option names are translated to option IDs using `FieldIDCache`
 
 Upload is the same path after the KV write: `handleUploadAttributes` stores the bytes, then `runSync()`, and answers `201` with the `Summary`. `handleDeleteAttributes` takes the same lock, deletes the KV key first, then `DeleteOmittedFields` with an empty keep-list so every plugin-owned field (and its values) is removed.
 
@@ -127,7 +129,7 @@ Upload is the same path after the KV write: `handleUploadAttributes` stores the 
 
 - `email` is the join key between external data and Mattermost users; `team` and `channel` are the join keys for channel records. They are consumed by `SyncUsers()` / `SyncChannels()` and listed as identity keys so `buildPropertyValue()` never writes them as attributes. Changing the identity strategy means touching both.
 - A `FieldIDCache` is built per object type during field sync inside `SyncDocument` and used immediately for that type's value sync. External names → Mattermost-generated field IDs; option names → option IDs; `FieldNameToType` holds the type declared in the document. A cache miss on a field name is a skip-with-warning; a cache miss on an *option* name is an error for that value.
-- Value JSON shape is type-dependent: text and date are marshaled strings; multiselect is an array of option **IDs**, not names; rank is a single option **ID** string, so a rank value looks like a text value on the wire and is only distinguishable by consulting the field definition.
+- Value JSON shape is type-dependent: text and date are marshaled strings; multiselect and graph are arrays of option **IDs**, not names; rank is a single option **ID** string, so a rank value looks like a text value on the wire and is only distinguishable by consulting the field definition.
 - `FieldNameToType` on `FieldIDCache` is how value sync recovers a field's declared type from the document's key. Adding an option-bearing field type means updating the value-formatting switch in `buildPropertyValue()` together with how field sync records the type, or values will be written as raw names instead of option IDs.
 - Failure handling is per-record and per-field: unknown fields, unsupported value types, format errors, missing users or channels, and upsert failures all log and continue. `SyncUsers()` and `SyncChannels()` return `nil` unless something structural goes wrong — a "successful" sync can have written nothing. Those skips still increment `UsersSkipped` / `ChannelsSkipped` / `FieldsSkipped` on the summary.
 - `syncLock` serializes `runSync()` (activation and upload) and `handleDeleteAttributes`. The lock covers the stored-document read as well as the property-service writes, so two triggers cannot interleave.
@@ -167,7 +169,7 @@ Things to preserve when changing these:
 ## Adding to the Plugin
 
 ### A new attribute
-Add an object to `fields.user` or `fields.channel` in the uploaded document and upload it. Select, multiselect, and rank types also need `options` populated; on a rank field every option needs a `rank`, which `buildOptionsArr()` enforces.
+Add an object to `fields.user` or `fields.channel` in the uploaded document and upload it. Select, multiselect, rank, and graph types also need `options` populated; on a rank field every option needs a `rank`, which `buildOptionsArr()` enforces.
 
 ### Server-side rules to work within
 Enforced by the property service, not by this plugin, so they cannot be worked around from here:

@@ -25,7 +25,7 @@ The attributes appear in **System Console → User Attributes**, on user profile
 
 ## Requirements
 
-- Mattermost server 12.0.0 or later (the `graph` attribute type requires it)
+- Mattermost server 12.0.0 or later (the `graph` attribute type requires it, and a server whose `PropertyFieldGraph` feature flag is off refuses graph fields)
 - An Enterprise Advanced license, for ABAC. Channel attributes need this tier specifically: below it every channel field is skipped and counted in the upload summary's skipped-fields number, and user attributes still sync.
 - Go 1.26.3 or later, to build the server binaries
 - Node v20.11, to build the webapp bundle and run the end-to-end tests
@@ -232,9 +232,42 @@ A rank attribute works like a select — a user holds one option — except each
 
 The ordering is what lets a policy express a threshold with `is at least` instead of listing every qualifying option, so `user.attributes.clearance >= "Secret"` matches both Secret and Top Secret. Every option on a rank attribute needs a `rank`, and the plugin refuses to create or update the attribute otherwise.
 
+### Add a graph attribute
+
+A graph attribute is a multi-value select whose options form a hierarchy: an object holds several options at once, like a multiselect, and there is no single-value variant. Each option may name the options directly above it in a `parents` list, by name, and those names resolve within the same `options` list — so one upload builds the whole hierarchy:
+
+```json
+{
+  "name": "classification",
+  "display_name": "Classification",
+  "type": "graph",
+  "access_mode": "public",
+  "options": [
+    {"name": "Alpha"},
+    {"name": "Alpha-1", "parents": ["Alpha"]},
+    {"name": "Alpha-2", "parents": ["Alpha"]}
+  ]
+}
+```
+
+A value for it is a list of option names, exactly like a multiselect: `{"email": "a@b.com", "classification": ["Alpha-1"]}`.
+
+The rules that bite:
+
+- The server's `PropertyFieldGraph` feature flag must be on; a server with it off refuses the field.
+- Option names must be unique within the field — parents are referenced by name, so a name has to identify one option.
+- A graph option cannot carry a `rank`.
+- A parent must exist in the same `options` list, can be named only once per option, and cannot be the option itself.
+- An option that omits `parents` keeps whatever parents it already has — the upload says nothing about them rather than clearing them. Detaching an option means writing `"parents": []`.
+- An update whose `options` list drops an option that still has an option below it is refused; remove or re-parent the lower option in the same upload.
+
+A field the server refuses is skipped and logged, and the rest of the document still syncs. Options are written inline in the same field write as the definition, so the practical ceiling is the upload size limit — enough for a hand-authored test hierarchy, not the server's 100,000-option scale.
+
+`data/attributes.json` carries no graph field for the same reason it carries no channel field: the end-to-end tests assert exact field counts against it, and a graph field would create or skip depending on whether the test server has the feature flag on.
+
 ### Attribute types cannot change
 
-Mattermost does not allow an attribute's type to change after it is created. To change one, upload a document that omits the field — which deletes it and its values — then upload again with the new type.
+Mattermost does not allow an attribute's type to change after it is created, and conversions to or from `graph` are refused outright on top of that. To change one, upload a document that omits the field — which deletes it and its values — then upload again with the new type.
 
 ## Troubleshooting
 
