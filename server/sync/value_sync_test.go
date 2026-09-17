@@ -296,7 +296,7 @@ func TestBuildPropertyValues(t *testing.T) {
 
 		values, err := buildForUser(client, userAttrs)
 		require.NoError(t, err)
-		assert.Len(t, values, 1) // job_title still written
+		assert.Len(t, values, 1)
 		assert.Equal(t, "test_field_id_1", values[0].FieldID)
 
 		api.AssertExpectations(t)
