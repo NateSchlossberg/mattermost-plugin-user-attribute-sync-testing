@@ -56,7 +56,7 @@ with `MM_ADMIN_USERNAME` / `MM_ADMIN_PASSWORD`.
 | `global-teardown.ts` | Runs once after all tests: removes the saved session file |
 | `pages/` | Page objects. All locators live here, one file per page or major section |
 | `tests/` | The specs |
-| `assets/` | Deliberately invalid fixture files. The valid one is the repo's own `data/user_attributes.json` |
+| `assets/` | Deliberately invalid fixture files. The valid one is the repo's own `data/attributes.json` |
 
 ## Conventions
 
