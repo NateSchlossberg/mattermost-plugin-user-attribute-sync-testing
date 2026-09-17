@@ -16,10 +16,11 @@ import (
 func testFieldIDCache() *FieldIDCache {
 	return &FieldIDCache{
 		FieldNameToID: map[string]string{
-			"job_title":  "test_field_id_1",
-			"programs":   "test_field_id_2",
-			"clearance":  "test_field_id_3",
-			"start_date": "test_field_id_4",
+			"job_title":      "test_field_id_1",
+			"programs":       "test_field_id_2",
+			"clearance":      "test_field_id_3",
+			"start_date":     "test_field_id_4",
+			"classification": "test_field_id_5",
 		},
 		OptionNameToID: map[string]string{
 			"programs|Apples":        "test_opt_id_apples",
@@ -29,12 +30,15 @@ func testFieldIDCache() *FieldIDCache {
 			"clearance|Confidential": "test_opt_id_confidential",
 			"clearance|Secret":       "test_opt_id_secret",
 			"clearance|Top Secret":   "test_opt_id_top_secret",
+			"classification|Alpha":   "test_opt_id_alpha",
+			"classification|Alpha-1": "test_opt_id_alpha_1",
 		},
 		FieldNameToType: map[string]model.PropertyFieldType{
-			"job_title":  model.PropertyFieldTypeText,
-			"programs":   model.PropertyFieldTypeMultiselect,
-			"clearance":  model.PropertyFieldTypeRank,
-			"start_date": model.PropertyFieldTypeDate,
+			"job_title":      model.PropertyFieldTypeText,
+			"programs":       model.PropertyFieldTypeMultiselect,
+			"clearance":      model.PropertyFieldTypeRank,
+			"start_date":     model.PropertyFieldTypeDate,
+			"classification": model.PropertyFieldTypeGraph,
 		},
 	}
 }
@@ -254,6 +258,48 @@ func TestBuildPropertyValues(t *testing.T) {
 		err = json.Unmarshal(values[0].Value, &optionIDs)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"test_opt_id_apples", "test_opt_id_lemons"}, optionIDs)
+	})
+
+	t.Run("writes a graph value as an array of option IDs", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		userAttrs := map[string]interface{}{
+			"email":          "test@example.com",
+			"classification": []interface{}{"Alpha", "Alpha-1"},
+		}
+
+		values, err := buildForUser(client, userAttrs)
+		require.NoError(t, err)
+		assert.Len(t, values, 1)
+
+		var optionIDs []string
+		err = json.Unmarshal(values[0].Value, &optionIDs)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"test_opt_id_alpha", "test_opt_id_alpha_1"}, optionIDs)
+	})
+
+	t.Run("unknown graph option skips only that field", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		userAttrs := map[string]interface{}{
+			"email":          "test@example.com",
+			"job_title":      "Software Engineer",
+			"classification": []interface{}{"Alpha", "Unknown"},
+		}
+
+		api.On("LogWarn", "Failed to format field value, skipping field",
+			"field_name", "classification",
+			"record", "test@example.com",
+			"error", mock.Anything)
+
+		values, err := buildForUser(client, userAttrs)
+		require.NoError(t, err)
+		assert.Len(t, values, 1) // job_title still written
+		assert.Equal(t, "test_field_id_1", values[0].FieldID)
+
+		api.AssertExpectations(t)
 	})
 
 	t.Run("looks up option_ids for rank fields", func(t *testing.T) {

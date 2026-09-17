@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -78,6 +79,63 @@ func TestSyncDocument(t *testing.T) {
 		assert.Equal(t, 0, summary.UsersSkipped)
 		assert.Equal(t, 0, summary.ChannelsSynced)
 		assert.Equal(t, 0, summary.ChannelsSkipped)
+	})
+
+	t.Run("creates a graph field then writes a graph value for it in one call", func(t *testing.T) {
+		client, api := newTestSyncClient(t)
+
+		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
+			return f.Name == "classification" && f.Type == model.PropertyFieldTypeGraph
+		})).Return(&model.PropertyField{
+			ID:   "generated_graph_id",
+			Name: "classification",
+			Type: model.PropertyFieldTypeGraph,
+			Attrs: model.StringInterface{
+				model.PropertyFieldAttributeOptions: []interface{}{
+					map[string]interface{}{"id": "opt_id_a", "name": "Alpha"},
+					map[string]interface{}{"id": "opt_id_b", "name": "Beta"},
+				},
+			},
+		}, nil)
+		mockEmptyFieldSearch(api, groupID)
+
+		user := &model.User{Id: "user1", Email: "user1@example.com"}
+		api.On("GetUserByEmail", "user1@example.com").Return(user, nil)
+		api.On("UpsertPropertyValues", mock.MatchedBy(func(values []*model.PropertyValue) bool {
+			if len(values) != 1 || values[0].FieldID != "generated_graph_id" || values[0].TargetID != "user1" {
+				return false
+			}
+			var optionIDs []string
+			if err := json.Unmarshal(values[0].Value, &optionIDs); err != nil {
+				return false
+			}
+			return assert.ObjectsAreEqual([]string{"opt_id_a", "opt_id_b"}, optionIDs)
+		})).Return([]*model.PropertyValue{}, nil)
+
+		doc := AttributesDocument{
+			Version: SupportedDocumentVersion,
+			Fields: FieldSchema{
+				User: []FieldDefinition{{
+					Name:        "classification",
+					DisplayName: "Classification",
+					Type:        model.PropertyFieldTypeGraph,
+					Options: []model.CustomProfileAttributesSelectOption{
+						{Name: "Alpha"},
+						{Name: "Beta"},
+					},
+				}},
+			},
+			Users: []map[string]interface{}{
+				{"email": "user1@example.com", "classification": []interface{}{"Alpha", "Beta"}},
+			},
+		}
+
+		summary, err := SyncDocument(client, groupID, pluginID, doc)
+		require.NoError(t, err)
+		assert.Equal(t, 1, summary.FieldsCreated)
+		assert.Equal(t, 0, summary.FieldsSkipped)
+		assert.Equal(t, 1, summary.UsersSynced)
+		assert.Equal(t, 0, summary.UsersSkipped)
 	})
 
 	t.Run("nil error still reports skipped fields and users", func(t *testing.T) {
